@@ -1,0 +1,6 @@
+{
+  "takeActions@1": {
+    "sources_that_must_reach_sinks": ["y@8"],
+    "sources_that_may_reach_sinks": ["y@8"]
+  }
+}

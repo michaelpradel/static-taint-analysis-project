@@ -1,0 +1,6 @@
+{
+  "calculations@1": {
+    "sources_that_must_reach_sinks": ["income_tax@2"],
+    "sources_that_may_reach_sinks": ["income_tax@2"]
+  }
+}

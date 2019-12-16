@@ -1,0 +1,10 @@
+{
+  "saveUserInfo@1": {
+    "sources_that_must_reach_sinks": [],
+    "sources_that_may_reach_sinks": ["id@2", "name@3", "age@4"]
+  },
+  "passUserId@19": {
+    "sources_that_must_reach_sinks": ["id@20"],
+    "sources_that_may_reach_sinks": ["id@20"]
+  }
+}
