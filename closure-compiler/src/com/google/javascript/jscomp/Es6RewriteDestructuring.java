@@ -142,7 +142,6 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
   @Override
   public void process(Node externs, Node root) {
     checkState(patternNestingStack.isEmpty());
-    TranspilationPasses.processTranspile(compiler, externs, featuresToTriggerRunningPass, this);
     TranspilationPasses.processTranspile(compiler, root, featuresToTriggerRunningPass, this);
     TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, featuresToMarkAsRemoved);
     checkState(patternNestingStack.isEmpty());
@@ -270,7 +269,6 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
         }
 
         paramList.replaceChild(param, newParam);
-        newParam.setOptionalArg(true);
         newParam.setJSDocInfo(jsDoc);
 
         compiler.reportChangeToChangeScope(function);
@@ -307,6 +305,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
     newParam.setJSDocInfo(patternParam.getJSDocInfo());
     patternParam.replaceWith(newParam);
     Node newDecl = IR.var(patternParam, astFactory.createName(tempVarName, paramType));
+    newDecl.useSourceInfoIfMissingFromForTree(patternParam);
     function.getLastChild().addChildAfter(newDecl, insertSpot);
     return newDecl;
   }
@@ -396,7 +395,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
             .useSourceInfoIfMissingFromForTree(objectPattern);
     // TODO(tbreisacher): Remove the "if" and add this JSDoc unconditionally.
     if (parent.isConst()) {
-      JSDocInfoBuilder jsDoc = new JSDocInfoBuilder(false);
+      JSDocInfoBuilder jsDoc = JSDocInfo.builder();
       jsDoc.recordConstancy();
       tempDecl.setJSDocInfo(jsDoc.build());
     }
@@ -636,7 +635,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
         nodeToDetach.getParent().addChildBefore(var, nodeToDetach);
 
         // `x`
-        newLHS = child.getFirstChild().detach();
+        newLHS = child.removeFirstChild();
         // `(temp1 === undefined) ? defaultValue : temp1;
         newRHS =
             defaultValueHook(
@@ -646,7 +645,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
         // becomes
         //   var temp = $jscomp.makeIterator(rhs);
         //   x = $jscomp.arrayFromIterator(temp);
-        newLHS = child.getFirstChild().detach();
+        newLHS = child.removeFirstChild();
         newRHS =
             astFactory.createJscompArrayFromIteratorCall(tempVarModel.cloneNode(), t.getScope());
       } else {
@@ -693,10 +692,10 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
     Node rhs = assignment.getLastChild().detach();
     // let temp0 = rhs;
     Node newAssignment = IR.let(tempVarModel.cloneNode(), rhs);
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS, compiler);
     // [x, y] = temp0;
     Node replacementExpr =
-        astFactory.createAssign(assignment.getFirstChild().detach(), tempVarModel.cloneNode());
+        astFactory.createAssign(assignment.removeFirstChild(), tempVarModel.cloneNode());
     Node exprResult = IR.exprResult(replacementExpr);
     // return temp0;
     Node returnNode = IR.returnNode(tempVarModel.cloneNode());
@@ -708,10 +707,10 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
 
     // Create a call to the function, and replace the pattern with the call.
     Node call = astFactory.createCall(arrowFn);
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.ARROW_FUNCTIONS);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.ARROW_FUNCTIONS, compiler);
     call.useSourceInfoIfMissingFromForTree(assignment);
     call.putBooleanProp(Node.FREE_CALL, true);
-    assignment.getParent().replaceChild(assignment, call);
+    assignment.replaceWith(call);
     NodeUtil.markNewScopesChanged(call, compiler);
     replacePattern(
         t,
@@ -772,7 +771,7 @@ public final class Es6RewriteDestructuring implements NodeTraversal.Callback, Ho
     catchBlock.addChildToFront(
         IR.declaration(
             pattern, astFactory.createName(tempVarName, pattern.getJSType()), Token.LET));
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS, compiler);
   }
 
   /** Helper for transpiling DEFAULT_VALUE trees. */

@@ -19,6 +19,7 @@ package com.google.javascript.jscomp;
 import static com.google.javascript.rhino.dtoa.DToA.numberToString;
 
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
+import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
@@ -70,7 +71,6 @@ final class ClosureOptimizePrimitives implements CompilerPass {
           processObjectCreateSetCall(n);
         }
       }
-      maybeProcessDomTagName(n);
     }
   }
 
@@ -104,7 +104,7 @@ final class ClosureOptimizePrimitives implements CompilerPass {
         callNode.removeChild(keyNode);
         callNode.removeChild(valueNode);
 
-        addKeyValueToObjLit(objNode, keyNode, valueNode);
+        addKeyValueToObjLit(objNode, keyNode, valueNode, NodeUtil.getEnclosingScript(callNode));
       }
       callNode.replaceWith(objNode);
       compiler.reportChangeToEnclosingScope(objNode);
@@ -177,7 +177,7 @@ final class ClosureOptimizePrimitives implements CompilerPass {
         curParam = curParam.getNext();
         callNode.removeChild(keyNode);
 
-        addKeyValueToObjLit(objNode, keyNode, valueNode);
+        addKeyValueToObjLit(objNode, keyNode, valueNode, NodeUtil.getEnclosingScript(callNode));
       }
       callNode.replaceWith(objNode);
       compiler.reportChangeToEnclosingScope(objNode);
@@ -217,7 +217,8 @@ final class ClosureOptimizePrimitives implements CompilerPass {
     return true;
   }
 
-  private void addKeyValueToObjLit(Node objNode, Node keyNode, Node valueNode) {
+  private void addKeyValueToObjLit(Node objNode, Node keyNode, Node valueNode,
+      Node scriptNode) {
     if (keyNode.isNumber() || keyNode.isString()) {
       if (keyNode.isNumber()) {
         keyNode = IR.string(numberToString(keyNode.getDouble()))
@@ -228,6 +229,7 @@ final class ClosureOptimizePrimitives implements CompilerPass {
       objNode.addChildToBack(IR.propdef(keyNode, valueNode));
     } else {
       objNode.addChildToBack(IR.computedProp(keyNode, valueNode).srcref(keyNode));
+      NodeUtil.addFeatureToScript(scriptNode, Feature.COMPUTED_PROPERTIES, compiler);
     }
   }
 
@@ -238,28 +240,5 @@ final class ClosureOptimizePrimitives implements CompilerPass {
       // Not ES6, all keys must be strings or numbers.
       return curParam.isString() || curParam.isNumber();
     }
-  }
-
-  /**
-   * Converts the given node to string if it is safe to do so.
-   */
-  private void maybeProcessDomTagName(Node n) {
-    if (NodeUtil.isLValue(n)) {
-      return;
-    }
-    String prefix = "goog$dom$TagName$";
-    String tagName;
-    if (n.isName() && n.getString().startsWith(prefix)) {
-      tagName = n.getString().substring(prefix.length());
-    } else if (n.isGetProp() && !n.getParent().isGetProp()
-        && n.getFirstChild().matchesQualifiedName("goog.dom.TagName")) {
-      tagName = n.getSecondChild().getString()
-          .replaceFirst(".*\\$", ""); // Added by DisambiguateProperties.
-    } else {
-      return;
-    }
-    Node stringNode = IR.string(tagName).srcref(n);
-    n.replaceWith(stringNode);
-    compiler.reportChangeToEnclosingScope(stringNode);
   }
 }

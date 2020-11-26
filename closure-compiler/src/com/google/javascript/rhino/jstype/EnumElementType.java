@@ -49,6 +49,8 @@ import com.google.javascript.rhino.Node;
 public class EnumElementType extends ObjectType {
   private static final long serialVersionUID = 1L;
 
+  private static final JSTypeClass TYPE_CLASS = JSTypeClass.ENUM_ELEMENT;
+
   /**
    * The primitive type this enum element type wraps. For instance, in
    * the following code defining the {@code LOCAL_CODES} enum
@@ -71,6 +73,13 @@ public class EnumElementType extends ObjectType {
     this.primitiveObjectType = elementType.toObjectType();
     this.name = name;
     this.enumType = enumType;
+
+    registry.getResolver().resolveIfClosed(this, TYPE_CLASS);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return TYPE_CLASS;
   }
 
   public EnumType getEnumType() {
@@ -142,48 +151,30 @@ public class EnumElementType extends ObjectType {
 
   @Override
   int recursionUnsafeHashCode() {
+    if (!this.hasReferenceName()) {
+      /**
+       * TODO(nickreid): Apparently this can happen if the l-value the enum is assinged to is not a
+       * qname. Fortunatly, this whole thing should become redundant once equality cannot be checked
+       * before resolution.
+       */
+      return 2;
+    }
     return NamedType.nominalHashCode(this);
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    if (forAnnotations) {
+  void appendTo(TypeStringBuilder sb) {
+    if (sb.isForAnnotations()) {
       // TODO(dimvar): this should use getReferenceName() instead of this.primitiveType
-      return sb.append(this.primitiveType);
+      sb.append(this.primitiveType);
+    } else {
+      sb.append(getReferenceName()).append("<").append(this.primitiveType).append(">");
     }
-    return sb.append(getReferenceName()).append("<").append(this.primitiveType).append(">");
   }
 
   @Override
   public String getReferenceName() {
     return name;
-  }
-
-  @Override
-  public boolean isSubtype(JSType that) {
-    return isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(
-      JSType that, ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-
-    // TODO(b/136298690): stop creating such a 'meet' and remove this logic.
-    // ** start hack **
-    if (that.isEnumElementType()
-        && JSType.areIdentical(getEnumType(), that.toMaybeEnumElementType().getEnumType())) {
-      // This can happen if, e.g., we have the 'meet' of enum elements Foo<number> and Bar<number>,
-      // which is Foo<Bar<number>>; and are comparing it to Foo<number>.
-      return primitiveType.isSubtype(
-          that.toMaybeEnumElementType().getPrimitiveType(), implicitImplCache, subtypingMode);
-    }
-    // ** end hack **
-
-    if (JSType.isSubtypeHelper(this, that, implicitImplCache, subtypingMode)) {
-      return true;
-    } else {
-      return primitiveType.isSubtype(that, implicitImplCache, subtypingMode);
-    }
   }
 
   @Override
@@ -215,8 +206,8 @@ public class EnumElementType extends ObjectType {
 
   @Override
   public FunctionType getConstructor() {
-    return primitiveObjectType == null ?
-        null : primitiveObjectType.getConstructor();
+    // TODO(b/147236174): This should always return null.
+    return primitiveObjectType == null ? null : primitiveObjectType.getConstructor();
   }
 
   @Override
@@ -263,10 +254,5 @@ public class EnumElementType extends ObjectType {
     primitiveType = primitiveType.resolve(reporter);
     primitiveObjectType = ObjectType.cast(primitiveType);
     return this;
-  }
-
-  @Override
-  JSType simplifyForOptimizations() {
-    return primitiveType.simplifyForOptimizations();
   }
 }

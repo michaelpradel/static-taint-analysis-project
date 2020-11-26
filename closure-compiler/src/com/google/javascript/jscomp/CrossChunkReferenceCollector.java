@@ -292,6 +292,7 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
         case IF:
         case OR:
         case SWITCH:
+        case COALESCE:
           // The first child of a conditional is not a boundary,
           // but all the rest of the children are.
           return n != parent.getFirstChild();
@@ -352,6 +353,8 @@ public final class CrossChunkReferenceCollector implements ScopedCallback, Compi
         return true;
 
       case CALL:
+        // In general it is not safe to move function calls, but we carve out an exception
+        // for the special stub method calls used for CrossChunkMethodMotion.
         // Case: `JSCompiler_stubMethod(x)`
         Node functionName = checkNotNull(valueNode.getFirstChild());
         return functionName.isName()

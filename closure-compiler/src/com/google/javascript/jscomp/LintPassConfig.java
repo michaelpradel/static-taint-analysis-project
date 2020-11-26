@@ -16,9 +16,12 @@
 package com.google.javascript.jscomp;
 
 import com.google.common.collect.ImmutableList;
+import com.google.javascript.jscomp.lint.CheckConstantCaseNames;
+import com.google.javascript.jscomp.lint.CheckDefaultExportOfGoogModule;
 import com.google.javascript.jscomp.lint.CheckDuplicateCase;
 import com.google.javascript.jscomp.lint.CheckEmptyStatements;
 import com.google.javascript.jscomp.lint.CheckEnums;
+import com.google.javascript.jscomp.lint.CheckExtraRequires;
 import com.google.javascript.jscomp.lint.CheckInterfaces;
 import com.google.javascript.jscomp.lint.CheckJSDocStyle;
 import com.google.javascript.jscomp.lint.CheckMissingSemicolon;
@@ -29,6 +32,7 @@ import com.google.javascript.jscomp.lint.CheckProvidesSorted;
 import com.google.javascript.jscomp.lint.CheckRequiresSorted;
 import com.google.javascript.jscomp.lint.CheckUnusedLabels;
 import com.google.javascript.jscomp.lint.CheckUselessBlocks;
+import com.google.javascript.jscomp.lint.CheckVar;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import java.util.List;
 
@@ -48,7 +52,6 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
     return ImmutableList.of(
         gatherModuleMetadataPass,
         earlyLintChecks,
-        checkRequires,
         variableReferenceCheck,
         closureRewriteClass,
         lateLintChecks);
@@ -79,9 +82,12 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
                   new CombinedCompilerPass(
                       compiler,
                       ImmutableList.of(
+                          new CheckConstantCaseNames(compiler),
+                          new CheckDefaultExportOfGoogModule(compiler),
                           new CheckDuplicateCase(compiler),
                           new CheckEmptyStatements(compiler),
                           new CheckEnums(compiler),
+                          new CheckExtraRequires(compiler),
                           new CheckJSDocStyle(compiler),
                           new CheckJSDoc(compiler),
                           new CheckMissingSemicolon(compiler),
@@ -95,7 +101,8 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
                               compiler, /* report */ true, /* protectSideEffectFreeCode */ false),
                           new CheckTypeImportCodeReferences(compiler),
                           new CheckUnusedLabels(compiler),
-                          new CheckUselessBlocks(compiler))))
+                          new CheckUselessBlocks(compiler),
+                          new CheckVar(compiler))))
           .setFeatureSet(FeatureSet.latest())
           .build();
 
@@ -104,16 +111,6 @@ class LintPassConfig extends PassConfig.PassConfigDelegate {
           .setName("variableReferenceCheck")
           .setRunInFixedPointLoop(true)
           .setInternalFactory(VariableReferenceCheck::new)
-          .setFeatureSet(FeatureSet.latest())
-          .build();
-
-  private final PassFactory checkRequires =
-      PassFactory.builder()
-          .setName("checkMissingAndExtraRequires")
-          .setInternalFactory(
-              (compiler) ->
-                  new CheckMissingAndExtraRequires(
-                      compiler, CheckMissingAndExtraRequires.Mode.SINGLE_FILE))
           .setFeatureSet(FeatureSet.latest())
           .build();
 

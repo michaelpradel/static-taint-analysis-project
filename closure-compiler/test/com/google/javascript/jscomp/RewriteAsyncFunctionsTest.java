@@ -23,6 +23,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.NodeUtil.Visitor;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
+import com.google.javascript.jscomp.testing.NoninjectingCompiler;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSType;
@@ -103,7 +105,8 @@ public class RewriteAsyncFunctionsTest extends CompilerTestCase {
    * last compile.
    */
   private CodeSubTree findClassDefinition(String wantedClassName) {
-    return new CodeSubTree(getLastCompiler().getJsRoot()).findClassDefinition(wantedClassName);
+    return new CodeSubTree(getLastCompiler().getRoot().getSecondChild())
+        .findClassDefinition(wantedClassName);
   }
 
   /** Return a list of all Nodes matching the given predicate starting at the given root. */
@@ -676,43 +679,6 @@ public class RewriteAsyncFunctionsTest extends CompilerTestCase {
             "          return yield promise;",
             "        });",
             "}"));
-  }
-
-  @Test
-  public void testAsyncFunctionInExterns() {
-    testExternChanges(
-        lines(
-            "/**",
-            " * @param {!Promise<?>} promise",
-            " * @return {?}",
-            " */",
-            "async function foo(promise) {}"),
-        "",
-        lines(
-            "/**",
-            " * @param {!Promise<?>} promise",
-            " * @return {?}",
-            " */",
-            "function foo(promise) {}"));
-  }
-
-  @Test
-  public void testAsyncFunctionInExternsWithNonemptyBody() {
-    testExternChanges(
-        lines(
-            "/**",
-            " * @param {!Promise<?>} promise",
-            " * @return {?}",
-            " */",
-            // TODO(b/119685646): Maybe we should report an error for non-empty function in externs?
-            "async function foo(promise) { return await promise; }"),
-        "",
-        lines(
-            "/**",
-            " * @param {!Promise<?>} promise",
-            " * @return {?}",
-            " */",
-            "function foo(promise) {}"));
   }
 
   @Test

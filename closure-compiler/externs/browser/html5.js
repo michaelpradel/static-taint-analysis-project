@@ -55,21 +55,34 @@ Node.prototype.contains = function(n) {};
 Node.prototype.isConnected;
 
 /**
- * Inserts the given HTML Element into the node at the location.
- * @param {string} where Where to insert the HTML text, one of 'beforeBegin',
- *     'afterBegin', 'beforeEnd', 'afterEnd'.
- * @param {!Element} element DOM Element to insert.
- * @return {?Element} The element that was inserted, or null, if the
- *     insertion failed.
- * @see https://dom.spec.whatwg.org/#dom-element-insertadjacentelement
+ * @type {boolean}
+ * @see https://html.spec.whatwg.org/multipage/scripting.html#the-script-element
  */
-Node.prototype.insertAdjacentElement = function(where, element) {};
+HTMLScriptElement.prototype.async;
+
+/**
+ * @type {string?}
+ * @see https://html.spec.whatwg.org/multipage/scripting.html#the-script-element
+ */
+HTMLScriptElement.prototype.crossOrigin;
+
+/**
+ * @type {string}
+ * @see https://html.spec.whatwg.org/multipage/scripting.html#the-script-element
+ */
+HTMLScriptElement.prototype.integrity;
 
 /**
  * @type {boolean}
  * @see https://html.spec.whatwg.org/multipage/scripting.html#the-script-element
  */
-HTMLScriptElement.prototype.async;
+HTMLScriptElement.prototype.noModule;
+
+/**
+ * @type {string}
+ * @see https://html.spec.whatwg.org/multipage/scripting.html#the-script-element
+ */
+HTMLScriptElement.prototype.referrerPolicy;
 
 /**
  * @constructor
@@ -258,10 +271,11 @@ CanvasPathMethods.prototype.arc = function(
 
 /**
  * @constructor
+ * @param {!Path2D|string=} arg
  * @implements {CanvasPathMethods}
  * @see https://html.spec.whatwg.org/multipage/scripting.html#path2d-objects
  */
-function Path2D() {}
+function Path2D(arg) {}
 
 /**
  * @return {undefined}
@@ -928,6 +942,12 @@ ImageBitmap.prototype.width;
 ImageBitmap.prototype.height;
 
 /**
+ * @typedef {!CanvasImageSource | !Blob | !ImageData}
+ * @see https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#imagebitmapsource
+ */
+var ImageBitmapSource;
+
+/**
  * @typedef {{
  *   imageOrientation: (string|undefined),
  *   premultiplyAlpha: (string|undefined),
@@ -941,15 +961,15 @@ ImageBitmap.prototype.height;
 var ImageBitmapOptions;
 
 /**
- * @param {(!HTMLCanvasElement|!Blob|!HTMLVideoElement|!HTMLImageElement|!ImageBitmap|!CanvasRenderingContext2D|!ImageData)}
- *     image
+ * @param {!ImageBitmapSource} image
  * @param {(number|!ImageBitmapOptions)=} sxOrOptions
  * @param {number=} sy
  * @param {number=} sw
  * @param {number=} sh
  * @param {!ImageBitmapOptions=} options
  * @return {!Promise<!ImageBitmap>}
- * @see * https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#dom-createimagebitmap
+ * @see https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#dom-createimagebitmap
+ * @see https://html.spec.whatwg.org/multipage/webappapis.html#windoworworkerglobalscope-mixin
  */
 function createImageBitmap(image, sxOrOptions, sy, sw, sh, options) {}
 
@@ -1410,49 +1430,7 @@ function importScripts(var_args) {}
 
 /**
  * @see http://dev.w3.org/html5/workers/
- * @constructor
- * @implements {EventTarget}
- */
-function WebWorker() {}
-
-/** @override */
-WebWorker.prototype.addEventListener = function(type, listener, opt_options) {};
-
-/** @override */
-WebWorker.prototype.removeEventListener = function(
-    type, listener, opt_options) {};
-
-/** @override */
-WebWorker.prototype.dispatchEvent = function(evt) {};
-
-/**
- * Stops the worker process
- * @return {undefined}
- */
-WebWorker.prototype.terminate = function() {};
-
-/**
- * Posts a message to the worker thread.
- * @param {string} message
- * @return {undefined}
- */
-WebWorker.prototype.postMessage = function(message) {};
-
-/**
- * Sent when the worker thread posts a message to its creator.
- * @type {?function(!MessageEvent<*>): void}
- */
-WebWorker.prototype.onmessage;
-
-/**
- * Sent when the worker thread encounters an error.
- * @type {?function(!ErrorEvent): void}
- */
-WebWorker.prototype.onerror;
-
-/**
- * @see http://dev.w3.org/html5/workers/
- * @param {string} scriptURL
+ * @param {!TrustedScriptURL|string} scriptURL
  * @param {!WorkerOptions=} opt_options
  * @constructor
  * @implements {EventTarget}
@@ -1529,12 +1507,14 @@ WorkerOptions.prototype.type;
 /**
  * @see http://dev.w3.org/html5/workers/
  * @param {string} scriptURL The URL of the script to run in the SharedWorker.
- * @param {string=} opt_name A name that can later be used to obtain a
- *     reference to the same SharedWorker.
+ * @param {(string|!WorkerOptions)=} options A name that can
+ *     later be used to obtain a reference to the same SharedWorker or a
+ *     WorkerOptions object which can be be used to specify how scriptURL is
+ *     fetched through the credentials option.
  * @constructor
  * @implements {EventTarget}
  */
-function SharedWorker(scriptURL, opt_name) {}
+function SharedWorker(scriptURL, options) {}
 
 /** @override */
 SharedWorker.prototype.addEventListener = function(
@@ -1864,6 +1844,12 @@ HTMLIFrameElement.prototype.srcdoc;
 HTMLIFrameElement.prototype.sandbox;
 
 /**
+ * @type {string}
+ * @see https://html.spec.whatwg.org/multipage/iframe-embed-object.html#attr-iframe-allow
+ */
+HTMLIFrameElement.prototype.allow;
+
+/**
  * @type {Window}
  * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLIFrameElement/contentWindow
  */
@@ -2165,6 +2151,12 @@ HTMLMediaElement.prototype.readyState;
 HTMLMediaElement.prototype.seeking;
 
 /**
+ * @type {string}
+ * @see https://html.spec.whatwg.org/multipage/media.html#dom-media-crossorigin
+ */
+HTMLMediaElement.prototype.crossOrigin;
+
+/**
  * The current time, in seconds.
  * @type {number}
  */
@@ -2292,6 +2284,7 @@ Text.prototype.getDestinationInsertionPoints = function() {};
 /**
  * @see http://www.whatwg.org/specs/web-apps/current-work/multipage/the-video-element.html#texttracklist
  * @constructor
+ * @implements {EventTarget}
  * @implements {IArrayLike<!TextTrack>}
  */
 function TextTrackList() {}
@@ -2305,6 +2298,16 @@ TextTrackList.prototype.length;
  */
 TextTrackList.prototype.getTrackById = function(id) {};
 
+/** @override */
+TextTrackList.prototype.addEventListener = function(
+    type, listener, opt_useCapture) {};
+
+/** @override */
+TextTrackList.prototype.dispatchEvent = function(evt) {};
+
+/** @override */
+TextTrackList.prototype.removeEventListener = function(
+    type, listener, opt_options) {};
 
 /**
  * @see http://www.whatwg.org/specs/web-apps/current-work/multipage/the-video-element.html#texttrack
@@ -2566,6 +2569,104 @@ var VideoPlaybackQuality;
  * @return {!VideoPlaybackQuality} Stats about the current playback.
  */
 HTMLVideoElement.prototype.getVideoPlaybackQuality = function() {};
+
+
+/**
+ * The metadata provided by the callback given to
+ * HTMLVideoElement.requestVideoFrameCallback().
+ *
+ * See https://wicg.github.io/video-rvfc/#video-frame-metadata
+ *
+ * @record
+ */
+function VideoFrameMetadata() {};
+
+/**
+ * The time at which the user agent submitted the frame for composition.
+ * @const {number}
+ */
+VideoFrameMetadata.prototype.presentationTime;
+
+/**
+ * The time at which the user agent expects the frame to be visible.
+ * @const {number}
+ */
+VideoFrameMetadata.prototype.expectedDisplayTime;
+
+/**
+ * The width of the video frame, in media pixels.
+ * @const {number}
+ */
+VideoFrameMetadata.prototype.width;
+
+/**
+ * The height of the video frame, in media pixels.
+ * @const {number}
+ */
+VideoFrameMetadata.prototype.height;
+
+/**
+ * The media presentation timestamp (PTS) in seconds of the frame presented
+ * (e.g. its timestamp on the video.currentTime timeline).
+ * @const {number}
+ */
+VideoFrameMetadata.prototype.mediaTime;
+
+/**
+ * A count of the number of frames submitted for composition.
+ * @const {number}
+ */
+VideoFrameMetadata.prototype.presentedFrames;
+
+/**
+ * The elapsed duration in seconds from submission of the encoded packet with
+ * the same presentation timestamp (PTS) as this frame (e.g. same as the
+ * mediaTime) to the decoder until the decoded frame was ready for presentation.
+ * @const {number|undefined}
+ */
+VideoFrameMetadata.prototype.processingDuration;
+
+/**
+ * For video frames coming from either a local or remote source, this is the
+ * time at which the frame was captured by the camera.
+ * @const {number|undefined}
+ */
+VideoFrameMetadata.prototype.captureTime;
+
+/**
+ * For video frames coming from a remote source, this is the time the encoded
+ * frame was received by the platform, i.e., the time at which the last packet
+ * belonging to this frame was received over the network.
+ * @const {number|undefined}
+ */
+VideoFrameMetadata.prototype.receiveTime;
+
+/**
+ * The RTP timestamp associated with this video frame.
+ * @const {number|undefined}
+ */
+VideoFrameMetadata.prototype.rtpTimestamp;
+
+/**
+ * @typedef {function(number,  ?VideoFrameMetadata): undefined}
+ * @see https://wicg.github.io/video-rvfc/#dom-htmlvideoelement-requestvideoframecallback
+ */
+var VideoFrameRequestCallback;
+
+/**
+ * Registers a callback to be fired the next time a frame is presented to the
+ * compositor.
+ * @param {!VideoFrameRequestCallback} callback
+ * @return {number}
+ */
+HTMLVideoElement.prototype.requestVideoFrameCallback = function(callback) {};
+
+/**
+ * Cancels an existing video frame request callback given its handle.
+ * @param {number} handle
+ * @return {undefined}
+ */
+HTMLVideoElement.prototype.cancelVideoFrameCallback = function(handle) {};
 
 
 /**
@@ -3294,12 +3395,10 @@ function History() {}
  * If there is no previous page, does nothing.
  *
  * @see https://html.spec.whatwg.org/multipage/history.html#dom-history-back
- * @param {number=} opt_distance the number of entries to go back
- *     (Mozilla doesn't support distance -- use #go instead)
  *
  * @return {undefined}
  */
-History.prototype.back = function(opt_distance) {};
+History.prototype.back = function() {};
 
 /**
  * Goes forward one step in the joint session history.
@@ -3454,7 +3553,7 @@ Location.prototype.hash;
 
 /**
  * Navigates to the given page.
- * @param {!TrustedURL|string} url
+ * @param {string} url
  * @return {undefined}
  * @see https://html.spec.whatwg.org/multipage/history.html#dom-location-assign
  */
@@ -3463,7 +3562,7 @@ Location.prototype.assign = function(url) {};
 /**
  * Removes the current page from the session history and navigates to the given
  * page.
- * @param {!TrustedURL|string} url
+ * @param {string} url
  * @return {undefined}
  * @see https://html.spec.whatwg.org/multipage/history.html#dom-location-replace
  */
@@ -3981,6 +4080,17 @@ HTMLInputElement.prototype.selectionDirection;
 HTMLInputElement.prototype.setSelectionRange = function(start, end, direction) {};
 
 /**
+ * @param {string} replacement
+ * @param {number=} start
+ * @param {number=} end
+ * @param {string=} selectionMode
+ * @see https://html.spec.whatwg.org/#dom-textarea/input-setrangetext
+ * @return {undefined}
+ */
+HTMLInputElement.prototype.setRangeText =
+    function(replacement, start, end, selectionMode) {};
+
+/**
  * @const {ValidityState}
  */
 HTMLInputElement.prototype.validity;
@@ -4049,8 +4159,17 @@ HTMLTextAreaElement.prototype.autofocus;
  */
 HTMLTextAreaElement.prototype.labels;
 
+/** @type {number} */
+HTMLTextAreaElement.prototype.maxLength;
+
+/** @type {number} */
+HTMLTextAreaElement.prototype.minLength;
+
 /** @type {string} */
 HTMLTextAreaElement.prototype.placeholder;
+
+/** @type {number} */
+HTMLTextAreaElement.prototype.textLength;
 
 /** @type {string} */
 HTMLTextAreaElement.prototype.validationMessage;
@@ -4121,7 +4240,7 @@ FullscreenOptions.prototype.navigationUI;
 /**
  * @see https://fullscreen.spec.whatwg.org/#dom-element-requestfullscreen
  * @param {!FullscreenOptions=} options
- * @return {undefined}
+ * @return {!Promise<undefined>}
  */
 Element.prototype.requestFullscreen = function(options) {};
 
@@ -5173,6 +5292,13 @@ Navigator.prototype.storage;
 
 /**
  * @param {!ShareData=} data
+ * @return {boolean}
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Navigator/canShare
+ */
+Navigator.prototype.canShare = function(data) {};
+
+/**
+ * @param {!ShareData=} data
  * @return {!Promise<undefined>}
  * @see https://wicg.github.io/web-share/#share-method
  */
@@ -5376,7 +5502,8 @@ HTMLSlotElement.prototype.assignedElements = function(options) {};
 Event.prototype.composed;
 
 /**
- * @return {!Array<!(Element|ShadowRoot|Document|Window)>}
+ * @return {!Array<!EventTarget>}
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/Event/composedPath
  */
 Event.prototype.composedPath = function() {};
 

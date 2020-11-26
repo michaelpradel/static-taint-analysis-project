@@ -15,9 +15,7 @@
  */
 package com.google.javascript.jscomp;
 
-import com.google.common.annotations.GwtIncompatible;
 import java.io.Serializable;
-import java.text.MessageFormat;
 
 /**
  * The type of a compile or analysis error.
@@ -32,8 +30,8 @@ public final class DiagnosticType
    */
   public final String key;
 
-  /** The default way to format errors */
-  public final MessageFormat format;
+  /** The default way to format errors. The style of format is java.text.MessageFormat. */
+  public final String format;
 
   /** The default reporting level for this diagnostic */
   public final CheckLevel level;
@@ -82,31 +80,23 @@ public final class DiagnosticType
    */
   public static DiagnosticType make(String name, CheckLevel level,
                                     String descriptionFormat) {
-    return
-        new DiagnosticType(name, level, new MessageFormat(descriptionFormat));
+    return new DiagnosticType(name, level, descriptionFormat);
   }
 
-  /**
-   * Create a DiagnosticType. Private to force use of static factory methods.
-   */
-  private DiagnosticType(String key, CheckLevel level, MessageFormat format) {
+  /** Create a DiagnosticType. Private to force use of static factory methods. */
+  private DiagnosticType(String key, CheckLevel level, String format) {
     this.key = key;
     this.level = level;
     this.format = format;
   }
 
-  /**
-   * Create a description from the MessageFormat and the arguments.
-   * Used by unit tests.
-   */
-  String format(Object ... arguments) {
-    return format.format(arguments);
+  String format(String... arguments) {
+    return Platform.formatMessage(format, arguments);
   }
 
   @Override
   public boolean equals(Object type) {
-    return type instanceof DiagnosticType &&
-        ((DiagnosticType) type).key.equals(key);
+    return type instanceof DiagnosticType && ((DiagnosticType) type).key.equals(key);
   }
 
   @Override
@@ -120,8 +110,7 @@ public final class DiagnosticType
   }
 
   @Override
-  @GwtIncompatible("java.text.MessageFormat.toPattern()")
   public String toString() {
-    return key + ": " + format.toPattern();
+    return key + ": " + format;
   }
 }

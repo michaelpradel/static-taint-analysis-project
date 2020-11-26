@@ -54,6 +54,13 @@ import javax.annotation.Nullable;
  * Builds a namespace of all qualified names whose root is in the global scope or a module, plus an
  * index of all references to those global names.
  *
+ * <p>This class tracks assignments to qualified names (e.g. `a.b.c`), because we often want to
+ * treat them as if they were global variables (e.g. CollapseProperties). However, when a qualified
+ * name begins an optional chain, we will not consider the optional chain to be part of the
+ * qualified name (e.g. `a.b?.c` is the qualified name `a.b` with an optional reference to property
+ * `c`.) We will record such optional chains as ALIASING_GET references to the non-optional
+ * qualified name part.
+ *
  * <p>When used as a StaticScope this class acts like a single parentless global scope. The module
  * references are currently only accessible by {@link #getNameFromModule(ModuleMetadata, String)},
  * as many use cases only care about global names. (This may change as module rewriting is moved
@@ -192,7 +199,7 @@ class GlobalNamespace
   }
 
   @Override
-  public Iterable<Name> getAllSymbols() {
+  public Collection<Name> getAllSymbols() {
     ensureGenerated();
     return Collections.unmodifiableCollection(getNameIndex().values());
   }
@@ -444,6 +451,10 @@ class GlobalNamespace
           type = getValueType(n.getFirstChild());
           break;
         case NAME:
+        case GETPROP:
+          // OPTCHAIN_GETPROP is intentionally not included in this case.
+          // "a.b?.c" is not a reference to the global name "a.b.c" for the
+          // purposes of GlobalNamespace.
           // TODO(b/127505242): CAST parents may indicate a set.
           // This may be a variable get or set.
           switch (parent.getToken()) {
@@ -492,7 +503,9 @@ class GlobalNamespace
             case ITER_REST:
             case OBJECT_REST:
               // This may be a set.
-              if (NodeUtil.isLhsByDestructuring(n)) {
+              // TODO(b/120303257): this should extend to qnames too, but doing
+              // so causes invalid output. Covered in CollapsePropertiesTest
+              if (n.isName() && NodeUtil.isLhsByDestructuring(n)) {
                 isSet = true;
                 type = NameType.OTHER;
               }
@@ -506,42 +519,12 @@ class GlobalNamespace
                 type = NameType.OTHER;
               }
           }
-          name = n.getString();
-          break;
-        case GETPROP:
-          // TODO(b/117673791): Merge this case with NAME case to fix.
-          // TODO(b/120303257): Merging this case with the NAME case makes this a breaking bug.
-          // TODO(b/127505242): CAST parents may indicate a set.
-          // This may be a namespaced name get or set.
-          if (parent != null) {
-            switch (parent.getToken()) {
-              case ASSIGN:
-                if (parent.getFirstChild() == n) {
-                  isSet = true;
-                  type = getValueType(n.getNext());
-                }
-                break;
-              case GETPROP:
-                // This is nested in another getprop. Return and only create a Ref for the outermost
-                // getprop in the chain.
-                return;
-              case INC:
-              case DEC:
-              case ITER_SPREAD:
-              case OBJECT_SPREAD:
-                break; // isSet = false, type = OTHER.
-              default:
-                if (NodeUtil.isAssignmentOp(parent) && parent.getFirstChild() == n) {
-                  isSet = true;
-                  type = NameType.OTHER;
-                }
-            }
-          }
           if (!n.isQualifiedName()) {
             return;
           }
           name = n.getQualifiedName();
           break;
+
         case CALL:
           if (isObjectHasOwnPropertyCall(n)) {
             String qname = n.getFirstFirstChild().getQualifiedName();
@@ -661,13 +644,8 @@ class GlobalNamespace
      * Gets the type of a value or simple expression.
      *
      * @param n An r-value in an assignment or variable declaration (not null)
-     * @return A {@link NameType}
      */
     NameType getValueType(Node n) {
-      // Shorthand assignment of extended object literal
-      if (n == null) {
-        return NameType.OTHER;
-      }
       switch (n.getToken()) {
         case CLASS:
           return NameType.CLASS;
@@ -855,6 +833,7 @@ class GlobalNamespace
         case NEG:
           type = Ref.Type.DIRECT_GET;
           break;
+        case OPTCHAIN_CALL:
         case CALL:
           if (n == parent.getFirstChild()) {
             // It is a call target
@@ -870,7 +849,8 @@ class GlobalNamespace
           break;
         case OR:
         case AND:
-          // This node is x or y in (x||y) or (x&&y). We only know that an
+        case COALESCE:
+          // This node is x or y in (x||y), (x&&y), or (x??y). We only know that an
           // alias is not getting created for this name if the result is used
           // in a boolean context or assigned to the same name
           // (e.g. var a = a || {}).
@@ -896,8 +876,8 @@ class GlobalNamespace
         case DESTRUCTURING_LHS:
         case ASSIGN:
           Node lhs = n.getPrevious();
-          if (lhs.isCast()) {
-            // Case: `/** @type {!Foo} */ (x) = ...`;
+          while (lhs.isCast()) {
+            // Case: `/** @type {!Foo} */ (x) = ...`; or multiple casts like `(cast(cast(x)) =`
             lhs = lhs.getOnlyChild();
           }
 
@@ -1043,6 +1023,9 @@ class GlobalNamespace
               return Ref.Type.DIRECT_GET;
             }
             break;
+          case DESTRUCTURING_LHS:
+            // e.g. `const {a, b} = condition ? qname1 : qname2;`
+            return Ref.Type.ALIASING_GET;
           case ASSIGN:
             if (!anc.getFirstChild().matchesQualifiedName(name)) {
               return Ref.Type.ALIASING_GET;
@@ -1331,6 +1314,10 @@ class GlobalNamespace
 
     int getGlobalSets() {
       return globalSets;
+    }
+
+    int getTotalSets() {
+      return globalSets + localSets;
     }
 
     int getCallGets() {

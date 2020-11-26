@@ -143,8 +143,7 @@ public final class SymbolTable {
 
   /** Get the symbols in their natural ordering. Always returns a mutable list. */
   public List<Symbol> getAllSymbolsSorted() {
-    List<Symbol> sortedSymbols = getNaturalSymbolOrdering().sortedCopy(symbols.values());
-    return sortedSymbols;
+    return getNaturalSymbolOrdering().sortedCopy(symbols.values());
   }
 
   /**
@@ -299,7 +298,7 @@ public final class SymbolTable {
   /** Gets the symbol for the prototype if this is the symbol for a constructor or interface. */
   public Symbol getSymbolForInstancesOf(Symbol sym) {
     FunctionType fn = sym.getFunctionType();
-    if (fn != null && fn.isNominalConstructor()) {
+    if (fn != null && fn.isNominalConstructorOrInterface()) {
       return getSymbolForInstancesOf(fn);
     }
     return null;
@@ -366,7 +365,7 @@ public final class SymbolTable {
 
     if (type.isGlobalThisType()) {
       return globalScope.getSlot(GLOBAL_THIS);
-    } else if (type.isNominalConstructor()) {
+    } else if (type.isNominalConstructorOrInterface()) {
       return linkToCtor
           ? globalScope.getSlot("Function")
           : getSymbolDeclaredBy(type.toMaybeFunctionType());
@@ -912,7 +911,7 @@ public final class SymbolTable {
         Symbol owner = s.scope.getQualifiedSlot(currentName);
         if (owner != null
             && getType(owner) != null
-            && (getType(owner).isNominalConstructor()
+            && (getType(owner).isNominalConstructorOrInterface()
                 || getType(owner).isFunctionPrototypeType()
                 || getType(owner).isEnumType())) {
           removeSymbol(s);
@@ -1341,8 +1340,7 @@ public final class SymbolTable {
     }
 
     public Reference defineReferenceAt(Node n) {
-      Reference result = references.computeIfAbsent(n, (Node k) -> new Reference(this, k));
-      return result;
+      return references.computeIfAbsent(n, (Node k) -> new Reference(this, k));
     }
 
     /** Sets the declaration node. May only be called once. */
@@ -1608,7 +1606,7 @@ public final class SymbolTable {
           sym.defineReferenceAt(n);
           return true;
         }
-      } else if (owner.isNominalConstructor()) {
+      } else if (owner.isNominalConstructorOrInterface()) {
         return maybeDefineReference(n, propName, getSymbolDeclaredBy(owner.toMaybeFunctionType()));
       } else if (owner.isEnumType()) {
         return maybeDefineReference(n, propName, getSymbolDeclaredBy(owner.toMaybeEnumType()));

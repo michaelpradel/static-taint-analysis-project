@@ -16,6 +16,8 @@
 
 package com.google.javascript.jscomp;
 
+import static java.lang.Math.min;
+
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
@@ -57,8 +59,8 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
 
   private final JSModuleGraph moduleGraph;
 
-  // Regular expression matcher for a blacklisting strings in aliasing.
-  private Matcher blacklist = null;
+  // Regular expression matcher for a skiplisting strings in aliasing.
+  private Matcher skiplist = null;
 
   /**
    * Strings that can be aliased, or null if all strings except 'undefined'
@@ -88,24 +90,25 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
    *
    * @param compiler The compiler
    * @param moduleGraph The module graph, or null if there are no modules
-   * @param strings Set of strings to be aliased. If null, all strings except
-   *     'undefined' will be aliased.
-   * @param blacklistRegex The regex to blacklist words in aliasing strings.
-   * @param outputStringUsage Outputs all strings and the number of times they
-   * were used in the application to the server log.
+   * @param strings Set of strings to be aliased. If null, all strings except 'undefined' will be
+   *     aliased.
+   * @param skiplistRegex The regex to skiplist words in aliasing strings.
+   * @param outputStringUsage Outputs all strings and the number of times they were used in the
+   *     application to the server log.
    */
-  AliasStrings(AbstractCompiler compiler,
-               JSModuleGraph moduleGraph,
-               Set<String> strings,
-               String blacklistRegex,
-               boolean outputStringUsage) {
+  AliasStrings(
+      AbstractCompiler compiler,
+      JSModuleGraph moduleGraph,
+      Set<String> strings,
+      String skiplistRegex,
+      boolean outputStringUsage) {
     this.compiler = compiler;
     this.moduleGraph = moduleGraph;
     this.aliasableStrings = strings;
-    if (blacklistRegex.length() != 0) {
-      this.blacklist = Pattern.compile(blacklistRegex).matcher("");
+    if (skiplistRegex.length() != 0) {
+      this.skiplist = Pattern.compile(skiplistRegex).matcher("");
     } else {
-      this.blacklist = null;
+      this.skiplist = null;
     }
     this.outputStringUsage = outputStringUsage;
   }
@@ -155,7 +158,7 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
         return;
       }
 
-      if (blacklist != null && blacklist.reset(str).find()) {
+      if (skiplist != null && skiplist.reset(str).find()) {
         return;
       }
 
@@ -183,11 +186,8 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
             return;
           }
         }
-        Node varParent = moduleVarParentMap.get(module);
-        if (varParent == null) {
-          varParent = compiler.getNodeForCodeInsertion(module);
-          moduleVarParentMap.put(module, varParent);
-        }
+        Node varParent =
+            moduleVarParentMap.computeIfAbsent(module, compiler::getNodeForCodeInsertion);
         info.moduleToContainDecl = module;
         info.parentForNewVarDecl = varParent;
         info.siblingToInsertVarDeclBefore = varParent.getFirstChild();
@@ -377,7 +377,7 @@ class AliasStrings implements CompilerPass, NodeTraversal.Callback {
       // Limit to avoid generating very long identifiers
       final int maxLimit = 20;
       final int length = s.length();
-      final int limit = Math.min(length, maxLimit);
+      final int limit = min(length, maxLimit);
 
       StringBuilder sb = new StringBuilder();
       sb.append(prefix);

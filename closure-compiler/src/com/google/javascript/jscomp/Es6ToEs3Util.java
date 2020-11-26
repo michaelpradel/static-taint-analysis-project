@@ -29,9 +29,8 @@ import java.util.Locale;
  */
 public final class Es6ToEs3Util {
 
-  static final DiagnosticType CANNOT_CONVERT = DiagnosticType.error(
-      "JSC_CANNOT_CONVERT",
-      "This code cannot be converted from ES6. {0}");
+  public static final DiagnosticType CANNOT_CONVERT =
+      DiagnosticType.error("JSC_CANNOT_CONVERT", "This code cannot be converted from ES6. {0}");
 
   // TODO(tbreisacher): Remove this once we have implemented transpilation for all the features
   // we intend to support.
@@ -73,7 +72,7 @@ public final class Es6ToEs3Util {
   }
 
   static void preloadEs6RuntimeFunction(AbstractCompiler compiler, String function) {
-    compiler.ensureLibraryInjected("es6/util/" + function.toLowerCase(Locale.US), false);
+    compiler.ensureLibraryInjected("es6/util/" + function.toLowerCase(Locale.ROOT), false);
   }
 
   static Node callEs6RuntimeFunction(
@@ -82,14 +81,6 @@ public final class Es6ToEs3Util {
     return IR.call(
         NodeUtil.newQName(compiler, "$jscomp." + function),
         iterable);
-  }
-
-  /** Adds the type t to Node n, and returns n. Does nothing if t is null. */
-  static Node withType(Node n, JSType t) {
-    if (t != null) {
-      n.setJSType(t);
-    }
-    return n;
   }
 
   /**

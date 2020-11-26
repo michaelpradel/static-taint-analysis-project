@@ -44,7 +44,6 @@ import static com.google.javascript.rhino.jstype.JSTypeNative.SYMBOL_TYPE;
 import static com.google.javascript.rhino.jstype.TernaryValue.FALSE;
 import static com.google.javascript.rhino.jstype.TernaryValue.UNKNOWN;
 
-
 /**
  * Symbol type.
  * @author johnlenz@google.com (John Lenz)
@@ -54,6 +53,11 @@ public final class SymbolType extends ValueType {
 
   SymbolType(JSTypeRegistry registry) {
     super(registry);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.SYMBOL;
   }
 
   @Override
@@ -93,11 +97,6 @@ public final class SymbolType extends ValueType {
   @Override
   public boolean matchesObjectContext() {
     return true;
-  }
-
-  @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(getDisplayName());
   }
 
   @Override

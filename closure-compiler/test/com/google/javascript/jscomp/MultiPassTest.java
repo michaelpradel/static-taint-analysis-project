@@ -21,6 +21,7 @@ import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES8_MODULES
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.Es6RewriteDestructuring.ObjectDestructuringRewriteMode;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
+import com.google.javascript.jscomp.testing.NoninjectingCompiler;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.Before;
@@ -32,9 +33,7 @@ import org.junit.runners.JUnit4;
  * This file contains the only tests that use the infrastructure in CompilerTestCase to run multiple
  * passes and do validity checks. The other files that use CompilerTestCase unit test a single pass.
  *
- * @author dimvar@google.com (Dimitris Vardoulakis)
  */
-
 @RunWith(JUnit4.class)
 public final class MultiPassTest extends CompilerTestCase {
   private List<PassFactory> passes;

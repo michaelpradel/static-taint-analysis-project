@@ -16,7 +16,6 @@
 package com.google.javascript.jscomp;
 
 import static com.google.javascript.jscomp.Es6ToEs3Util.createType;
-import static com.google.javascript.jscomp.Es6ToEs3Util.withType;
 
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet.Feature;
@@ -63,7 +62,6 @@ public final class Es6ForOfConverter extends NodeTraversal.AbstractPostOrderCall
 
   @Override
   public void process(Node externs, Node root) {
-    TranspilationPasses.processTranspile(compiler, externs, transpiledFeatures, this);
     TranspilationPasses.processTranspile(compiler, root, transpiledFeatures, this);
     TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, transpiledFeatures);
   }
@@ -89,14 +87,18 @@ public final class Es6ForOfConverter extends NodeTraversal.AbstractPostOrderCall
 
     JSType typeParam = unknownType;
     if (addTypes) {
-      // TODO(sdh): This is going to be null if the iterable is nullable or unknown. We might want
-      // to consider some way of unifying rather than simply looking at the nominal type.
-      ObjectType iterableType = iterable.getJSType().autobox().toMaybeObjectType();
+      // TODO(sdh): This is going to be null if the iterable is a union or nullable type. We might
+      // want to consider some way of unifying rather than simply looking at the nominal type.
+      // Also: we have to consider the case where iterable.getJSType() is null because unless
+      // TypeCheck runs, some expression are never given types by TypeInference.
+      // TODO(b/154044898): remove this null check.
+      ObjectType iterableType =
+          iterable.getJSType() != null ? iterable.getJSType().autobox().toMaybeObjectType() : null;
       if (iterableType != null) {
-        // This will be the unknown type if iterableType is not actually a subtype of Iterable
         typeParam =
-            iterableType.getInstantiatedTypeArgument(
-                registry.getNativeType(JSTypeNative.ITERABLE_TYPE));
+            iterableType
+                .getTemplateTypeMap()
+                .getResolvedTemplateType(registry.getIterableTemplate());
       }
     }
     JSType iteratorType = createGenericType(JSTypeNative.ITERATOR_TYPE, typeParam);
@@ -104,7 +106,11 @@ public final class Es6ForOfConverter extends NodeTraversal.AbstractPostOrderCall
         addTypes
             ? iteratorType.toMaybeObjectType().getPropertyType("next").toMaybeFunctionType()
             : null;
-    JSType iIterableResultType = addTypes ? iteratorNextType.getReturnType() : null;
+
+    JSType iIterableResultType = unknownType;
+    if (addTypes && iteratorNextType != null) {
+      iIterableResultType = iteratorNextType.getReturnType();
+    }
 
     JSDocInfo varJSDocInfo = variable.getJSDocInfo();
     Node iterName =
@@ -137,7 +143,7 @@ public final class Es6ForOfConverter extends NodeTraversal.AbstractPostOrderCall
 
       call.setJSType(iteratorType);
     }
-    Node init = IR.var(withType(iterName.cloneTree(), iterName.getJSType()), call);
+    Node init = IR.var(iterName.cloneTree().setJSType(iterName.getJSType()), call);
     Node initIterResult = iterResult.cloneTree();
     initIterResult.addChildToFront(getNext.cloneTree());
     init.addChildToBack(initIterResult);
@@ -149,7 +155,7 @@ public final class Es6ForOfConverter extends NodeTraversal.AbstractPostOrderCall
     if (!NodeUtil.isNameDeclaration(variable)) {
       declarationOrAssign =
           astFactory.createAssign(
-              withType(variable.cloneTree().setJSDocInfo(null), typeParam),
+              variable.cloneTree().setJSDocInfo(null).setJSType(typeParam),
               astFactory.createGetProp(iterResult.cloneTree(), "value"));
       declarationOrAssign.setJSDocInfo(varJSDocInfo);
       declarationOrAssign = IR.exprResult(declarationOrAssign);

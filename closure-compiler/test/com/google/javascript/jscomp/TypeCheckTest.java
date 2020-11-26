@@ -29,6 +29,7 @@ import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.jscomp.type.ClosureReverseAbstractInterpreter;
 import com.google.javascript.jscomp.type.SemanticReverseAbstractInterpreter;
 import com.google.javascript.rhino.IR;
@@ -50,11 +51,12 @@ import org.junit.runners.JUnit4;
 
 /**
  * Tests {@link TypeCheck}.
- *
  */
-
 @RunWith(JUnit4.class)
 public final class TypeCheckTest extends TypeCheckTestCase {
+
+  private static final String BOUNDED_GENERICS_USE_MSG =
+      "Bounded generic semantics are currently still in development";
 
   private static final String SUGGESTION_CLASS =
       "/** @constructor\n */\n"
@@ -70,7 +72,6 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Override
   protected CompilerOptions getDefaultOptions() {
     CompilerOptions options = super.getDefaultOptions();
-    options.setLanguageIn(LanguageMode.ECMASCRIPT_2017);
     options.setLanguageOut(LanguageMode.ECMASCRIPT5);
     return options;
   }
@@ -255,12 +256,10 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testTypeCheck25() {
     testTypes(
-        lines(
-            "function foo(/** {a: number} */ obj) {};",
-            "foo({b: 'abc'});"),
+        lines("function foo(/** {a: number} */ obj) {};", "foo({b: 'abc'});"),
         lines(
             "actual parameter 1 of foo does not match formal parameter",
-            "found   : {a: (number|undefined), b: string}",
+            "found   : {\n  a: (number|undefined),\n  b: string\n}",
             "required: {a: number}",
             "missing : []",
             "mismatch: [a]"));
@@ -290,6 +289,48 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   public void testTypeCheck28() {
     testTypes("function foo(/** ? */ obj) {};"
         + "foo({a: 123});");
+  }
+
+  @Test
+  public void testPropertyOnATypedefGetsResolved() {
+    testTypes(
+        lines(
+            "const a = {};",
+            "/** @typedef {{prop: string}} */",
+            "  a.b;",
+            "/** @typedef {string} */",
+            "  a.b.c;",
+            "const abAlias = a.b;",
+            "var /** !abAlias.whatIsThis */ y = 'foo';"),
+        RhinoErrorReporter.UNRECOGNIZED_TYPE_ERROR);
+  }
+
+  @Test
+  public void testPropertyOnTypedefAliasesGetsRecognized() {
+    // TODO(b/144187784): Handle making property b.c recognized when referenced via aAlias
+    testTypes(
+        lines(
+            "const a = {};",
+            "/** @typedef {{prop: string}} */",
+            "  a.b;",
+            "/** @typedef {string} */",
+            "  a.b.c;",
+            "const aAlias = a;",
+            "var /** aAlias.b.c */ x;"),
+        RhinoErrorReporter.UNRECOGNIZED_TYPE_ERROR);
+  }
+
+  @Test
+  public void testPropertyOnTypedefAliasesGetsRecognized2() {
+    testTypes(
+        lines(
+            "const a = {};",
+            "/** @typedef {{prop: string}} */",
+            "  a.b;",
+            "/** @typedef {string} */",
+            "  a.b.c;",
+            "const aAlias = a;",
+            "var /** aAlias.b */ x = {prop: 'foo'};"));
   }
 
   @Test
@@ -517,6 +558,22 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testUnaryPlusWithAllType() {
+    testTypes("/** @type {*} */var x; +x;");
+  }
+
+  @Test
+  public void testUnaryPlusWithNoType() {
+    // TODO(bradfordcsmith): Should we be reporting an error for operating on a NO_TYPE?
+    testTypes("/** @type {!null} */var x; +x;");
+  }
+
+  @Test
+  public void testUnaryPlusWithUnknownType() {
+    testTypes("/** @type {?} */var x; +x;");
+  }
+
+  @Test
   public void testOptionalUnknownNamedType() {
     testTypes("/** @param {!T} opt_x\n@return {undefined} */\n" +
         "function f(opt_x) { return opt_x; }\n" +
@@ -605,6 +662,17 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testBooleanReduction1NullishCoalesce() {
+    testTypes("/**@type {string} */var x; x = null ?? \"a\";");
+  }
+
+  @Test
+  public void optionalChaining() {
+    // TODO(b/151248857): Calculate the appropriate type here
+    testTypes("/**@type {?} */var x = a?.b;");
+  }
+
+  @Test
   public void testBooleanReduction2() {
     // It's important for the type system to recognize that in no case
     // can the boolean expression evaluate to a boolean value.
@@ -620,8 +688,17 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
   @Test
   public void testBooleanReduction4() {
-    testTypes("/** @param {Object} x\n @return {Object} */" +
-        "(function(x) { return null || x || null ; })");
+    testTypes(
+        "/** @param {?Object} x\n @return {?Object} */"
+            + "(function(x) { return null || x || null ; })");
+  }
+
+  @Test
+  public void testBooleanReduction4NullishCoalesce() {
+    testTypes(
+        lines(
+           "/** @param {?Object} x\n @return {!Object} */",
+            "(function(x) { return null ?? x ?? {} ; })"));
   }
 
   @Test
@@ -665,6 +742,85 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         "}\n" +
         "return null;\n" +
         "};");
+  }
+
+  @Test
+  public void testNullishCoalesceWithAndExpressions() {
+    // `(s && undefined)` = `undefined` because `s` is typed as `!Array`, triggering RHS
+    // `(s && "a")` = `"a"` because `s` is typed as `!Array`
+    testTypes(
+        lines(
+            "/** @param {!Array} s",
+            "    @return {string} */",
+            "(function(s) { return (s && undefined) ?? (s && \"a\"); })"));
+  }
+
+  @Test
+  public void testNullishCoalesceShortCutsOnZero() {
+    testTypes("/**@type {number} */var x; x = 0 ?? \"a\";");
+  }
+
+  @Test
+  public void testNullishCoalesceUnionsOperatorTypesWithNullRemoved() {
+    testTypes(
+        lines(
+            "/**",
+            "* @param {string|null} x",
+            "* @return {string|number}",
+            "*/",
+            "var f = function(x) {",
+            "return x ?? 3;",
+            "};"));
+  }
+
+  @Test
+  public void testNullishCoalesceShortCutsOnFalse() {
+    testTypes("/**@type {boolean} */var x; x = false ?? undefined ?? [];");
+  }
+
+  @Test
+  public void testNullishCoalesceChaining() {
+    testTypes("/**@type {number} */var x; x = null ?? undefined ?? 3;");
+  }
+
+  @Test
+  public void testNullishCoalesceOptionalNullable() {
+    testTypes(
+        lines(
+            "/**",
+            " * @param {?Object=} optionalNullableObject",
+            " * @return {!Object}",
+            " */",
+            "function f(optionalNullableObject = undefined) {",
+            " return optionalNullableObject ?? {};", // always returns !Object type
+            "};"));
+  }
+
+  @Test
+  public void testNullishCoalesceUseNonNullFunction() {
+    // if we are trying to evaluate the LHS then x must be null and useNonNull only takes non null
+    // objects as inputs
+    testTypes(
+        lines(
+            "/**",
+            " * @param {!Object} x",
+            " * @return {!Object}",
+            " */",
+            " function useNonNull(x) {",
+            "   return x;",
+            " };",
+            "/** @type {?Object} */ var x;",
+            "x ?? useNonNull(x);"),
+        lines(
+            "actual parameter 1 of useNonNull does not match formal parameter",
+            "found   : null",
+            "required: Object"));
+  }
+
+  @Test
+  public void testNullishCoalesceLeftTypeNotDefined() {
+    // making sure we don't throw a NPE
+    testTypes(lines("/** @type {number} */ var a = x ?? 1;"));
   }
 
   @Test
@@ -971,36 +1127,6 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testTypeOfReduction8() {
-    testClosureTypes(
-        CLOSURE_DEFS +
-        "/** @param {number|string} x\n@return {string} */\n" +
-        "function f(x) {\n" +
-        "return goog.isString(x) && x.length == 3 ? x : 'a';\n" +
-        "}", null);
-  }
-
-  @Test
-  public void testTypeOfReduction9() {
-    testClosureTypes(
-        CLOSURE_DEFS +
-        "/** @param {!Array|string} x\n@return {string} */\n" +
-        "function f(x) {\n" +
-        "return goog.isArray(x) ? 'a' : x;\n" +
-        "}", null);
-  }
-
-  @Test
-  public void testTypeOfReduction10() {
-    testClosureTypes(
-        CLOSURE_DEFS +
-        "/** @param {Array|string} x\n@return {Array} */\n" +
-        "function f(x) {\n" +
-        "return goog.isArray(x) ? x : [];\n" +
-        "}", null);
-  }
-
-  @Test
   public void testTypeOfReduction11() {
     testClosureTypes(
         CLOSURE_DEFS +
@@ -1084,16 +1210,6 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         "function(a) {this.a = a};\n" +
         "/** @return {string} */ T.prototype.f = function() {\n" +
         "return typeof this.a == 'string' ? this.a : 'a'; }");
-  }
-
-  @Test
-  public void testQualifiedNameReduction4() {
-    testClosureTypes(
-        CLOSURE_DEFS +
-        "/** @param {string|Array} a\n@constructor */ var T = " +
-        "function(a) {this.a = a};\n" +
-        "/** @return {string} */ T.prototype.f = function() {\n" +
-        "return goog.isString(this.a) ? this.a : 'a'; }", null);
   }
 
   @Test
@@ -2309,10 +2425,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
   @Test
   public void testNumericComparison2() {
-    testTypes("/**@param {!Object} a*/ function f(a) {return a < 3;}",
-        "left side of numeric comparison\n" +
-        "found   : Object\n" +
-        "required: number");
+    testTypes(
+        "/**@param {!Object} a*/ function f(a) {return a < 3;}",
+        lines(
+            "left side of numeric comparison", //
+            "found   : Object",
+            "required: (bigint|number)"));
   }
 
   @Test
@@ -2332,18 +2450,22 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
   @Test
   public void testNumericComparison5() {
-    testTypes("/**@param {*} a*/ function f(a) {return a < 3;}",
-        "left side of numeric comparison\n" +
-        "found   : *\n" +
-        "required: number");
+    testTypes(
+        "/**@param {*} a*/ function f(a) {return a < 3;}",
+        lines(
+            "left side of numeric comparison", //
+            "found   : *",
+            "required: (bigint|number)"));
   }
 
   @Test
   public void testNumericComparison6() {
-    testTypes("/**@return {void} */ function foo() { if (3 >= foo()) return; }",
-        "right side of numeric comparison\n" +
-        "found   : undefined\n" +
-        "required: number");
+    testTypes(
+        "/**@return {void} */ function foo() { if (3 >= foo()) return; }",
+        lines(
+            "right side of numeric comparison",
+            "found   : undefined",
+            "required: (bigint|number)"));
   }
 
   @Test
@@ -3255,32 +3377,34 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testInnerFunction6() {
+  public void testInnerFunction6NullishCoalesce() {
     testClosureTypes(
-        CLOSURE_DEFS +
-        "function f() {" +
-        " var x = 0 || function() {};\n" +
-        " function g() { if (goog.isFunction(x)) { x(1); } }" +
-        " g();" +
-        "}",
-        "Function x: called with 1 argument(s). " +
-        "Function requires at least 0 argument(s) " +
-        "and no more than 0 argument(s).");
+        lines(
+            CLOSURE_DEFS,
+            "function f() {",
+            " var x = null ?? function() {};",
+            " function g() { if (goog.isFunction(x)) { x(1); } }",
+            " g();",
+            "}"),
+        "Function x: called with 1 argument(s). "
+            + "Function requires at least 0 argument(s) "
+            + "and no more than 0 argument(s).");
   }
 
   @Test
-  public void testInnerFunction7() {
+  public void testInnerFunction7NullishCoalesce() {
     testClosureTypes(
-        CLOSURE_DEFS +
-        "function f() {" +
-        " /** @type {number|function()} */" +
-        " var x = 0 || function() {};\n" +
-        " function g() { if (goog.isFunction(x)) { x(1); } }" +
-        " g();" +
-        "}",
-        "Function x: called with 1 argument(s). " +
-        "Function requires at least 0 argument(s) " +
-        "and no more than 0 argument(s).");
+        lines(
+            CLOSURE_DEFS,
+            "function f() {",
+            " /** @type {function()} */",
+            " var x = null ?? function() {};",
+            " function g() { if (goog.isFunction(x)) { x(1); } }",
+            " g();",
+            "}"),
+        "Function x: called with 1 argument(s). "
+            + "Function requires at least 0 argument(s) "
+            + "and no more than 0 argument(s).");
   }
 
   @Test
@@ -3885,7 +4009,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "  /** @type {Function} */ this.foo;",
             "}"),
         "(new f).foo",
-        createNullableType(getNativeU2UConstructorType()).toString());
+        createNullableType(getNativeFunctionType()).toString());
   }
 
   @Test
@@ -3895,7 +4019,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "/** @constructor */ function f() {} ", // preserve newlines
             "/** @type {Function} */ f.prototype.foo;"),
         "(new f).foo",
-        createNullableType(getNativeU2UConstructorType()).toString());
+        createNullableType(getNativeFunctionType()).toString());
   }
 
   @Test
@@ -3905,7 +4029,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "/** @constructor */ function f() {} ", // preserve newlines
             "/** @type {Function} */ f.prototype.foo = function() {};"),
         "(new f).foo",
-        createNullableType(getNativeU2UConstructorType()).toString());
+        createNullableType(getNativeFunctionType()).toString());
   }
 
   @Test
@@ -3913,7 +4037,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
     testFunctionType(
         "/** @type {Function} */ var f = function() {}; ",
         "f",
-        createNullableType(getNativeU2UConstructorType()).toString());
+        createNullableType(getNativeFunctionType()).toString());
   }
 
   @Test
@@ -4117,6 +4241,23 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testInWithThis_narrowsPropertyType() {
+    // TODO(lharker): should we stop doing this narrowing? this code would break under property
+    // renaming.
+    testTypes(
+        lines(
+            "/** @constructor */",
+            "function Foo() {}",
+            "Foo.prototype.method = function() {",
+            "  if ('x' in this) {",
+            "    return this.x;", // this access is allowed
+            "  }",
+            "  return this.y;", // this access causes a warning
+            "}"),
+        "Property y never defined on Foo");
+  }
+
+  @Test
   public void testInWithWellKnownSymbol() {
     testTypesWithCommonExterns("Symbol.iterator in Object");
   }
@@ -4238,12 +4379,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   public void testForOf4() {
     testTypesWithCommonExterns(
         lines(
-            "function f(/** !Iterator<number> */ it) {",
+            "function f(/** !Iterator<number> */ it) {", //
             "  for (let x of it) {}",
             "}"),
         lines(
             "Can only iterate over a (non-null) Iterable type",
-            "found   : Iterator<number>",
+            "found   : Iterator<number,?,?>",
             "required: Iterable"));
   }
 
@@ -4924,8 +5065,46 @@ public final class TypeCheckTest extends TypeCheckTestCase {
     testTypes(
         lines(
             "/** @enum */ var YourEnum = {FOO: 3};",
+            "const MyEnum = YourEnum;",
+            "/** @param {MyEnum} x */ function f(x) {} f(MyEnum.FOO);"));
+  }
+
+  @Test
+  public void testConstAliasedEnum_constJSDoc() {
+    testTypes(
+        lines(
+            "/** @enum */ var YourEnum = {FOO: 3};",
             "/** @const */ var MyEnum = YourEnum;",
             "/** @param {MyEnum} x */ function f(x) {} f(MyEnum.FOO);"));
+  }
+
+  @Test
+  public void testConstAliasedEnum_qnameConstJSDoc() {
+    testTypes(
+        lines(
+            "/** @enum */ var YourEnum = {FOO: 3};",
+            "const ns = {};",
+            "/** @const */",
+            "ns.MyEnum = YourEnum;",
+            "/** @param {ns.MyEnum} x */ function f(x) {} f(ns.MyEnum.FOO);"));
+  }
+
+  @Test
+  public void testConstAliasedEnum_inObjectLit() {
+    testTypes(
+        lines(
+            "/** @enum */ var YourEnum = {FOO: 3};",
+            "const ns = {/** @const */ MyEnum: YourEnum}",
+            "/** @param {ns.MyEnum} x */ function f(x) {} f(ns.MyEnum.FOO);"));
+  }
+
+  @Test
+  public void testConstAliasedEnum_nestedInObjectLit() {
+    testTypes(
+        lines(
+            "/** @enum */ var YourEnum = {FOO: 3};",
+            "const ns = {/** @const */ x: {/** @const */ MyEnum: YourEnum}}",
+            "/** @param {ns.x.MyEnum} x */ function f(x) {} f(ns.x.MyEnum.FOO);"));
   }
 
   @Test
@@ -5294,6 +5473,25 @@ public final class TypeCheckTest extends TypeCheckTestCase {
                 // nsAlias.OldType, not ns.OldType.
                 "goog.inherits(NewType, nsAlias.OldType);"),
         "Missing @extends tag on type NewType");
+  }
+
+  @Test
+  public void testBadExtends_withUnionType() {
+    // Regression test for b/146562659, crash when extending a union type.
+    testTypes(
+        lines(
+            "/** @interface */",
+            "class Foo {}",
+            "/** @interface */",
+            "class Bar {}",
+            "/** @typedef {!Foo|!Bar} */",
+            "let Baz;",
+            "/**",
+            " * @interface",
+            " * @extends {Baz}",
+            " */",
+            "class Blah {}"),
+        "Blah @extends non-object type (Bar|Foo)");
   }
 
   @Test
@@ -5874,6 +6072,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
   @Test
   public void testGenericBoundExplicitUnknown() {
+    compiler.getOptions().setWarningLevel(DiagnosticGroups.BOUNDED_GENERICS, CheckLevel.OFF);
+
     testTypes(
         lines(
             "/**", //
@@ -5895,10 +6095,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " */",
             "function f(x) {}",
             "var a = f('a');"),
-        lines(
-            "actual parameter 1 of f does not match formal parameter",
-            "found   : string",
-            "required: number"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "actual parameter 1 of f does not match formal parameter",
+              "found   : string",
+              "required: number"),
+        });
   }
 
   @Test
@@ -5910,7 +6113,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {number} T",
             " */",
             "function f(x) {}",
-            "var a = f(3);"));
+            "var a = f(3);"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -5924,10 +6128,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " */",
             "function f(x) { return 'a'; }",
             "var a = f(0);"),
-        lines(
-            "inconsistent return type", //
-            "found   : string", //
-            "required: T extends number"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "inconsistent return type", //
+              "found   : string", //
+              "required: T extends number"),
+        });
   }
 
   @Test
@@ -5940,10 +6147,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " */",
             "function f(x) { return x; }",
             "var a = f(null);"),
-        lines(
-            "actual parameter 1 of f does not match formal parameter",
-            "found   : null",
-            "required: number"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "actual parameter 1 of f does not match formal parameter",
+              "found   : null",
+              "required: number"),
+        });
   }
 
   @Test
@@ -5955,7 +6165,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {?number} T",
             " */",
             "function f(x) { return x; }",
-            "var a = f(null);"));
+            "var a = f(null);"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -5971,10 +6182,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {number|boolean} T",
             " */",
             "function foo(x) { return stringID(x); }"),
-        lines(
-            "actual parameter 1 of stringID does not match formal parameter",
-            "found   : T extends (boolean|number)",
-            "required: string"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "actual parameter 1 of stringID does not match formal parameter",
+              "found   : T extends (boolean|number)",
+              "required: string"),
+        });
   }
 
   @Test
@@ -5989,7 +6203,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @param {T} x",
             " * @template {number} T",
             " */",
-            "function foo(x) { return numID(x); }"));
+            "function foo(x) { return numID(x); }"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -6005,10 +6220,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {number|boolean|string} T",
             " */",
             "function foo(x) { return numID(x); }"),
-        lines(
-            "actual parameter 1 of numID does not match formal parameter",
-            "found   : T extends (boolean|number|string)",
-            "required: number"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "actual parameter 1 of numID does not match formal parameter",
+              "found   : T extends (boolean|number|string)",
+              "required: number"),
+        });
   }
 
   @Test
@@ -6020,7 +6238,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @param {number|string|boolean} y",
             " * @template {number|string} T",
             " */",
-            "function foo(x,y) { y=x; }"));
+            "function foo(x,y) { y=x; }"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -6033,10 +6252,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {number|string} T",
             " */",
             "function foo(x,y) { y=x; }"),
-        lines(
-            "assignment", //
-            "found   : number", //
-            "required: T extends (number|string)"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "assignment", //
+              "found   : number", //
+              "required: T extends (number|string)"),
+        });
   }
 
   @Test
@@ -6049,10 +6271,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {number|string} T",
             " */",
             "function foo(x,y) { x=y; }"),
-        lines(
-            "assignment", //
-            "found   : T extends (number|string)", //
-            "required: number"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "assignment", //
+              "found   : T extends (number|string)", //
+              "required: number"),
+        });
   }
 
   @Test
@@ -6064,7 +6289,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @param {T} y",
             " * @template {number|string} T",
             " */",
-            "function foo(x,y) { x=y; }"));
+            "function foo(x,y) { x=y; }"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -6078,8 +6304,11 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "var /** !Foo<Str> */ a;",
             "/** @typedef {string} */",
             "let Str;"),
-        "Bounded generic type error. string assigned to template type T is not a subtype of bound"
-            + " number");
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          "Bounded generic type error. string assigned to template type T is not a subtype of bound"
+              + " number",
+        });
   }
 
   @Test
@@ -6092,8 +6321,11 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " */",
             "function F() {}",
             "var /** F<string> */ a;"),
-        "Bounded generic type error. string assigned to template type T is not a subtype of bound"
-            + " (boolean|number)");
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          "Bounded generic type error. string assigned to template type T is not a subtype of bound"
+              + " (boolean|number)",
+        });
   }
 
   @Test
@@ -6106,7 +6338,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {number|boolean} T",
             " */",
             "function F(x) {}",
-            "var /** F<number> */ a;"));
+            "var /** F<number> */ a;"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -6120,10 +6353,14 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {number|string} U",
             " */",
             "function foo(x,y) { x=y; }"),
-        lines(
-            "assignment", //
-            "found   : U extends (number|string)", //
-            "required: T extends (number|string)"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "assignment", //
+              "found   : U extends (number|string)", //
+              "required: T extends (number|string)"),
+        });
   }
 
   @Test
@@ -6138,7 +6375,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "function foo(x,y) {",
             "  var /** !Array<T> */ z = y;",
             "  y = x;",
-            "}"));
+            "}"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -6151,7 +6389,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {boolean|string} T",
             " * @template {T} U",
             " */",
-            "function foo(x,y) { x=y; }"));
+            "function foo(x,y) { x=y; }"),
+        ImmutableList.of(BOUNDED_GENERICS_USE_MSG, BOUNDED_GENERICS_USE_MSG));
   }
 
   @Test
@@ -6168,10 +6407,14 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "  var /** U */ z = x;",
             "  x = y;",
             "}"),
-        lines(
-            "initializing variable", //
-            "found   : T extends (boolean|string)", //
-            "required: U extends T extends (boolean|string)"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "initializing variable", //
+              "found   : T extends (boolean|string)", //
+              "required: U extends T extends (boolean|string)"),
+        });
   }
 
   @Test
@@ -6189,7 +6432,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " */",
             "function bar(x) { return x; }",
             "foo(true);",
-            "bar('Hi');"));
+            "bar('Hi');"),
+        ImmutableList.of(BOUNDED_GENERICS_USE_MSG, BOUNDED_GENERICS_USE_MSG));
   }
 
   @Test
@@ -6209,6 +6453,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "foo('Hi');",
             "bar(true);"),
         new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          BOUNDED_GENERICS_USE_MSG,
           lines(
               "actual parameter 1 of foo does not match formal parameter",
               "found   : string",
@@ -6216,7 +6462,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
           lines(
               "actual parameter 1 of bar does not match formal parameter",
               "found   : boolean",
-              "required: string")
+              "required: string"),
         });
   }
 
@@ -6238,7 +6484,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "}",
             "var F = new Foo();",
             "F.foo('Hi');",
-            "foo(true);"));
+            "foo(true);"),
+        ImmutableList.of(BOUNDED_GENERICS_USE_MSG, BOUNDED_GENERICS_USE_MSG));
   }
 
   @Test
@@ -6261,6 +6508,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "F.foo(true);",
             "foo('Hi');"),
         new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          BOUNDED_GENERICS_USE_MSG,
           lines(
               "actual parameter 1 of Foo.prototype.foo does not match formal parameter",
               "found   : boolean",
@@ -6268,7 +6517,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
           lines(
               "actual parameter 1 of foo does not match formal parameter",
               "found   : string",
-              "required: boolean")
+              "required: boolean"),
         });
   }
 
@@ -6297,7 +6546,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " */",
             "function cloneInternal(x) {",
             "  return x;",
-            "}"));
+            "}"),
+        ImmutableList.of(BOUNDED_GENERICS_USE_MSG, BOUNDED_GENERICS_USE_MSG));
   }
 
   @Test
@@ -6316,7 +6566,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "  return x;",
             "}",
             "",
-            "var /** function(!Foo): !Foo */ y = identity;"));
+            "var /** function(!Foo): !Foo */ y = identity;"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -6359,14 +6610,20 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "}",
             "const /** !Foo<string> */ f = new Foo();",
             "f.foo(3);"),
-        lines(
-            "actual parameter 1 of Foo.prototype.foo does not match formal parameter",
-            "found   : number",
-            "required: string"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "actual parameter 1 of Foo.prototype.foo does not match formal parameter",
+              "found   : number",
+              "required: string"),
+        });
   }
 
   @Test
   public void testCyclicGenericBoundGenericError() {
+    compiler.getOptions().setWarningLevel(DiagnosticGroups.BOUNDED_GENERICS, CheckLevel.OFF);
+
     testTypes(
         lines(
             "/**",
@@ -6376,6 +6633,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " */",
             "class Foo { }"),
         Arrays.asList(
+
             "Parse error. Cycle detected in inheritance chain of type S",
             "Parse error. Cycle detected in inheritance chain of type T",
             "Parse error. Cycle detected in inheritance chain of type U"),
@@ -6384,6 +6642,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
   @Test
   public void testUnitCyclicGenericBoundGenericError() {
+    compiler.getOptions().setWarningLevel(DiagnosticGroups.BOUNDED_GENERICS, CheckLevel.OFF);
+
     testTypes(
         lines(
             "/**", //
@@ -6396,6 +6656,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
   @Test
   public void testSecondUnitCyclicGenericBoundGenericError() {
+    compiler.getOptions().setWarningLevel(DiagnosticGroups.BOUNDED_GENERICS, CheckLevel.OFF);
+
     testTypes(
         lines(
             "/**", //
@@ -6425,7 +6687,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template {Vertex<V, E>} V",
             " * @template {Edge<V, E>} E",
             " */",
-            "class Graph {}"));
+            "class Graph {}"),
+        ImmutableList.of(BOUNDED_GENERICS_USE_MSG, BOUNDED_GENERICS_USE_MSG));
   }
 
   @Test
@@ -6443,10 +6706,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @return {C<U>}",
             " */",
             "function f(x) { return x; }"),
-        lines(
-            "inconsistent return type", //
-            "found   : (C<boolean>|null)", //
-            "required: (C<U extends (number|string)>|null)"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "inconsistent return type", //
+              "found   : (C<boolean>|null)", //
+              "required: (C<U extends (number|string)>|null)"),
+        });
   }
 
   @Test
@@ -6466,10 +6732,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "function f(x) {}",
             "var /** C<boolean> */ c;",
             "f(c);"),
-        lines(
-            "actual parameter 1 of f does not match formal parameter",
-            "found   : (C<boolean>|null)",
-            "required: (C<(number|string)>|null)"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "actual parameter 1 of f does not match formal parameter",
+              "found   : (C<boolean>|null)",
+              "required: (C<(number|string)>|null)"),
+        });
   }
 
   @Test
@@ -6491,6 +6760,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "var /** C<string> */ c;",
             "f(c,false);"),
         new String[] {
+          BOUNDED_GENERICS_USE_MSG,
           lines(
               "actual parameter 1 of f does not match formal parameter",
               "found   : (C<string>|null)",
@@ -6519,7 +6789,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " */",
             "function f(x,y) {}",
             "var /** C<number|string> */ c;",
-            "f(c,0);"));
+            "f(c,0);"),
+        BOUNDED_GENERICS_USE_MSG);
   }
 
   @Test
@@ -6544,10 +6815,14 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "foo.baz(3);",
             "foo.baz(null);",
             "foo.baz('3');"),
-        lines(
-            "actual parameter 1 of Foo.prototype.baz does not match formal parameter",
-            "found   : string",
-            "required: S extends (null|number)"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "actual parameter 1 of Foo.prototype.baz does not match formal parameter",
+              "found   : string",
+              "required: S extends (null|number)"),
+        });
   }
 
   @Test
@@ -6560,10 +6835,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @param {T} t",
             " */",
             "function f(t) { t = new C(); }"),
-        lines(
-            "assignment", //
-            "found   : C", //
-            "required: T extends (C|null)"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "assignment", //
+              "found   : C", //
+              "required: T extends (C|null)"),
+        });
   }
 
   @Test
@@ -6583,10 +6861,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "  }",
             "}",
             "function f(t) { t = new C(); }"),
-        lines(
-            "assignment to property x of Foo",
-            "found   : number",
-            "required: T extends (number|string)"));
+        new String[] {
+          BOUNDED_GENERICS_USE_MSG,
+          lines(
+              "assignment to property x of Foo",
+              "found   : number",
+              "required: T extends (number|string)"),
+        });
   }
 
   @Test
@@ -6672,6 +6953,18 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   public void testBadImplementsAConstructor() {
     testTypes("/** @constructor */function A() {}\n" +
         "/** @constructor \n * @implements {A} */function B() {}",
+        "can only implement interfaces");
+  }
+
+  @Test
+  public void testBadImplementsAConstructorWithSubclass() {
+    testTypes(
+        lines(
+            "/** @constructor */", //
+            "function A() {}",
+            "/** @implements {A} */",
+            "class B {}",
+            "class C extends B {}"),
         "can only implement interfaces");
   }
 
@@ -7479,7 +7772,10 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "function g(/** !Generator<string> */ x) {",
             "  var /** null */ y = f(x);",
             "}"),
-        "initializing variable\n" + "found   : string\n" + "required: null");
+        lines(
+            "initializing variable", //
+            "found   : string",
+            "required: null"));
   }
 
   @Test
@@ -7722,6 +8018,15 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testVar15NullishCoalesce() {
+    testTypes(
+        lines(
+            "/** @return {number} */", //
+            "function f() { var x = x ?? {}; return x; }"),
+        lines("inconsistent return type", "found   : {}", "required: number"));
+  }
+
+  @Test
   public void testAssign1() {
     testTypes("var goog = {};" +
         "/** @type {number} */goog.foo = 'hello';",
@@ -7776,6 +8081,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testNullishCoalesceNumber() {
+    testTypes(
+        lines("/** @type {number}  */var a; /** @type {number}  */var b; a + b ?? undefined;"));
+  }
+
+  @Test
   public void testOr2() {
     testTypes("/** @type {number}  */var a;" +
         "/** @type {number}  */var b;" +
@@ -7786,8 +8097,21 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testNullishCoalesceNumberVar() {
+    // Making sure that ?? returns LHS as long as it is not null/undefined
+    // 0 is falsy but not null/undefined so c should always be a
+    testTypes(
+        lines("/** @type {number}  */var a;", "/** @type {number}  */var c = a ?? undefined;"));
+  }
+
+  @Test
   public void testOr3() {
     testTypes("/** @type {(number|undefined)} */var a;" + "/** @type {number}  */var c = a || 3;");
+  }
+
+  @Test
+  public void testNullishCoalesceNumberUndefined() {
+    testTypes("/** @type {(number|undefined)} */var a; /** @type {number}  */var c = a ?? 3;");
   }
 
   /**
@@ -7812,6 +8136,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testNullishCoalesceAssignment2() {
+    testTypes(
+        "/**@type {number} */var x;x=undefined ?? \"a\";",
+        lines("assignment", "found   : string", "required: number"));
+  }
+
+  @Test
   public void testOr6() {
     testTypes(
         lines(
@@ -7824,6 +8155,18 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "initializing variable",
             "found   : Array",
             "required: undefined"));
+  }
+
+  @Test
+  public void testNullishCoaleceAssignment3() {
+    testTypes(
+        lines(
+            "/** @param {!Array=} opt_x */",
+            "function removeDuplicates(opt_x) {",
+            "  var x = opt_x ?? [];",
+            "  var /** undefined */ y = x;",
+            "}"),
+        lines("initializing variable", "found   : Array", "required: undefined"));
   }
 
   @Test
@@ -8346,66 +8689,6 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testClosure1() {
-    testClosureTypes(
-        CLOSURE_DEFS
-            + "/** @type {string|undefined} */var a;"
-            + "/** @type {string} */"
-            + "var b = goog.isDef(a) ? a : 'default';",
-        null);
-  }
-
-  @Test
-  public void testClosure2() {
-    testClosureTypes(
-        CLOSURE_DEFS
-            + "/** @type {string?} */var a;"
-            + "/** @type {string} */"
-            + "var b = goog.isNull(a) ? 'default' : a;",
-        null);
-  }
-
-  @Test
-  public void testClosure3() {
-    testClosureTypes(
-        CLOSURE_DEFS
-            + "/** @type {string|null|undefined} */var a;"
-            + "/** @type {string} */"
-            + "var b = goog.isDefAndNotNull(a) ? a : 'default';",
-        null);
-  }
-
-  @Test
-  public void testClosure4() {
-    testClosureTypes(
-        CLOSURE_DEFS
-            + "/** @type {string|undefined} */var a;"
-            + "/** @type {string} */"
-            + "var b = !goog.isDef(a) ? 'default' : a;",
-        null);
-  }
-
-  @Test
-  public void testClosure5() {
-    testClosureTypes(
-        CLOSURE_DEFS
-            + "/** @type {string?} */var a;"
-            + "/** @type {string} */"
-            + "var b = !goog.isNull(a) ? a : 'default';",
-        null);
-  }
-
-  @Test
-  public void testClosure6() {
-    testClosureTypes(
-        CLOSURE_DEFS
-            + "/** @type {string|null|undefined} */var a;"
-            + "/** @type {string} */"
-            + "var b = !goog.isDefAndNotNull(a) ? 'default' : a;",
-        null);
-  }
-
-  @Test
   public void testClosure7() {
     testClosureTypes(
         CLOSURE_DEFS +
@@ -8421,8 +8704,10 @@ public final class TypeCheckTest extends TypeCheckTestCase {
       lines(
           "/**",
           " * @param {T} p",
-          " * @return {T}",
+          " * @return {U}",
           " * @template T",
+          " * @template U :=",
+          "       mapunion(T, (E) => cond(sub(E, union('null', 'undefined')), none(), E)) =:",
           " * @closurePrimitive {asserts.truthy}",
           " */",
           "function assertTruthy(p) { return p; }",
@@ -10407,6 +10692,19 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testTypeofBigInt() {
+    testTypes(
+        lines(
+            "/**",
+            " * @param {bigint|number} i",
+            " * @return {boolean}",
+            " */",
+            "function foo(i) {",
+            "  return typeof i === 'bigint';",
+            "}"));
+  }
+
+  @Test
   public void testIssue700() {
     testTypes(
         "/**\n" +
@@ -10731,6 +11029,17 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         "}");
   }
 
+  @Test
+  public void testNullishCoalesceTypeIsFirstOrSecondArgument() {
+    testTypes(
+        lines(
+            "/** @param {Function} opt_f ... */",
+            "function foo(opt_f) {",
+            "  /** @type {Function} */",
+            "  return opt_f ?? function() {};",
+            "}"));
+  }
+
   /**
    * Tests that undefined can be compared shallowly to a value of type (number,undefined) regardless
    * of the side on which the undefined value is.
@@ -11043,6 +11352,45 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         "/** @type {?} */ var C;" +
         "C.bar + 1;",
         TypeCheck.POSSIBLE_INEXISTENT_PROPERTY);
+  }
+
+  @Test
+  public void testTemplateSubtyping_0() {
+    // TODO(b/145145406): This is testing that things work despite this bug.
+    testTypes(
+        lines(
+            // IFoo is a NamedType here.
+            "/** @implements {IFoo<number>} */",
+            "class Foo { }",
+            "",
+            "/**",
+            " * @template T",
+            " * @interface",
+            " */",
+            "class IFoo { }",
+            "",
+            "const /** !IFoo<number> */ x = new Foo();"));
+  }
+
+  @Test
+  public void testTemplateSubtyping_1() {
+    // TOOD(b/139230800): This is testing things work despite this bug.
+    testTypes(
+        lines(
+            "/**",
+            " * @template T",
+            " * @interface",
+            " */",
+            "class IFoo { }",
+            "",
+            "/** @implements {IFoo<number>} */",
+            "class FooA { }",
+            "",
+            "/** @implements {IFoo<string>} */",
+            "class FooB extends FooA { }",
+            "",
+            "const /** !IFoo<number> */ x = new FooB();",
+            "const /** !IFoo<string> */ y = new FooB();"));
   }
 
   @Test
@@ -11666,6 +12014,19 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         "/** @type {some.unknown.type} */var f1;" +
         "var f2 = opt_f || f1;" +
         "f2();",
+        "Bad type annotation. Unknown type some.unknown.type");
+  }
+
+  @Test
+  public void testCall3NullishCoalesce() {
+    // We are checking that an unresolved named type can successfully
+    // meet with a functional type to produce a callable type.
+    testTypes(
+        lines(
+            "/** @type {Function|undefined} */var opt_f;",
+            "/** @type {some.unknown.type} */var f1;",
+            "var f2 = opt_f ?? f1;",
+            "f2();"),
         "Bad type annotation. Unknown type some.unknown.type");
   }
 
@@ -12524,22 +12885,23 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
   @Test
   public void testCast13() {
-    // Test to make sure that the forward-declaration still allows for
-    // a warning.
-    testClosureTypes("var goog = {}; " +
-        "goog.addDependency('zzz.js', ['goog.foo'], []);" +
-        "goog.foo = function() {};" +
-        "function f() { return /** @type {goog.foo} */ (new Object()); }",
-        "Bad type annotation. Unknown type goog.foo");
+    // In a typespace world, types and values may collide on the same symbol.
+    testClosureTypes(
+        "var goog = {}; "
+            + "goog.forwardDeclare('goog.foo');"
+            + "goog.foo = function() {};"
+            + "function f() { return /** @type {goog.foo} */ (new Object()); }",
+        null);
   }
 
   @Test
   public void testCast14() {
     // Test to make sure that the forward-declaration still prevents
     // some warnings.
-    testClosureTypes("var goog = {}; " +
-        "goog.addDependency('zzz.js', ['goog.bar'], []);" +
-        "function f() { return /** @type {goog.bar} */ (new Object()); }",
+    testClosureTypes(
+        "var goog = {}; "
+            + "goog.forwardDeclare('goog.bar');"
+            + "function f() { return /** @type {goog.bar} */ (new Object()); }",
         null);
   }
 
@@ -13515,8 +13877,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
     JSType functionAType = js1Node.getFirstChild().getJSType();
     assertThat(functionAType.toString()).isEqualTo("function(): undefined");
-    assertTypeEquals(getNativeUnknownType(), getNativeU2UFunctionType().getPropertyType("m1"));
-    assertTypeEquals(getNativeUnknownType(), getNativeU2UFunctionType().getPropertyType("m2"));
+    assertTypeEquals(getNativeUnknownType(), getNativeFunctionType().getPropertyType("m1"));
+    assertTypeEquals(getNativeUnknownType(), getNativeFunctionType().getPropertyType("m2"));
   }
 
   @Test
@@ -13826,11 +14188,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testInheritanceCheck14() {
     testClosureTypes(
-        "var goog = {};\n" +
-        "/** @constructor\n @extends {goog.Missing} */\n" +
-        "goog.Super = function() {};\n" +
-        "/** @constructor\n @extends {goog.Super} */function Sub() {};" +
-        "/** @override */Sub.prototype.foo = function() {};",
+        lines(
+            "var goog = {};",
+            "/** @constructor\n @extends {goog.Missing} */",
+            "goog.Super = function() {};",
+            "/** @constructor\n @extends {goog.Super} */function Sub() {};",
+            "/** @override */ Sub.prototype.foo = function() {};"),
         "Bad type annotation. Unknown type goog.Missing");
   }
 
@@ -15276,21 +15639,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testForwardTypeDeclaration1() {
-    testClosureTypes(
-        // malformed addDependency calls shouldn't cause a crash
-        "goog.addDependency();" +
-        "goog.addDependency('y', [goog]);" +
-
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/** @param {MyType} x \n * @return {number} */" +
-        "function f(x) { return 3; }", null);
-  }
-
-  @Test
   public void testForwardTypeDeclaration2() {
-    String f = "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/** @param {MyType} x */ function f(x) { }";
+    String f = "goog.forwardDeclare('MyType');" + "/** @param {MyType} x */ function f(x) { }";
     testClosureTypes(f, null);
     testClosureTypes(f + "f(3);",
         "actual parameter 1 of f does not match formal parameter\n" +
@@ -15301,29 +15651,29 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testForwardTypeDeclaration3() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/** @param {MyType} x */ function f(x) { return x; }" +
-        "/** @constructor */ var MyType = function() {};" +
-        "f(3);",
-        "actual parameter 1 of f does not match formal parameter\n" +
-        "found   : number\n" +
-        "required: (MyType|null)");
+        "goog.forwardDeclare('MyType');"
+            + "/** @param {MyType} x */ function f(x) { return x; }"
+            + "/** @constructor */ var MyType = function() {};"
+            + "f(3);",
+        "actual parameter 1 of f does not match formal parameter\n"
+            + "found   : number\n"
+            + "required: (MyType|null)");
   }
 
   @Test
   public void testForwardTypeDeclaration4() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/** @param {MyType} x */ function f(x) { return x; }" +
-        "/** @constructor */ var MyType = function() {};" +
-        "f(new MyType());",
+        "goog.forwardDeclare('MyType');"
+            + "/** @param {MyType} x */ function f(x) { return x; }"
+            + "/** @constructor */ var MyType = function() {};"
+            + "f(new MyType());",
         null);
   }
 
   @Test
   public void testForwardTypeDeclaration5() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MyType'], []);"
+        "goog.forwardDeclare('MyType');"
             + "/**\n"
             + " * @constructor\n"
             + " * @extends {MyType}\n"
@@ -15335,12 +15685,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testForwardTypeDeclaration6() {
     testClosureTypesMultipleWarnings(
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/**\n" +
-        " * @constructor\n" +
-        " * @implements {MyType}\n" +
-        " */ var YourType = function() {};" +
-        "/** @override */ YourType.prototype.method = function() {};",
+        "goog.forwardDeclare('MyType');"
+            + "/**\n"
+            + " * @constructor\n"
+            + " * @implements {MyType}\n"
+            + " */ var YourType = function() {};"
+            + "/** @override */ YourType.prototype.method = function() {};",
         ImmutableList.of(
             "Could not resolve type in @implements tag of YourType",
             "property method not defined on any superclass of YourType"));
@@ -15349,31 +15699,34 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testForwardTypeDeclaration7() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/** @param {MyType=} x */" +
-        "function f(x) { return x == undefined; }", null);
+        "goog.forwardDeclare('MyType');"
+            + "/** @param {MyType=} x */"
+            + "function f(x) { return x == undefined; }",
+        null);
   }
 
   @Test
   public void testForwardTypeDeclaration8() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/** @param {MyType} x */" +
-        "function f(x) { return x.name == undefined; }", null);
+        "goog.forwardDeclare('MyType');"
+            + "/** @param {MyType} x */"
+            + "function f(x) { return x.name == undefined; }",
+        null);
   }
 
   @Test
   public void testForwardTypeDeclaration9() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/** @param {MyType} x */" +
-        "function f(x) { x.name = 'Bob'; }", null);
+        "goog.forwardDeclare('MyType');"
+            + "/** @param {MyType} x */"
+            + "function f(x) { x.name = 'Bob'; }",
+        null);
   }
 
   @Test
   public void testForwardTypeDeclaration10() {
-    String f = "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/** @param {MyType|number} x */ function f(x) { }";
+    String f =
+        "goog.forwardDeclare('MyType');" + "/** @param {MyType|number} x */ function f(x) { }";
     testClosureTypes(f, null);
     testClosureTypes(f + "f(3);", null);
     testClosureTypes(f + "f('3');",
@@ -15387,12 +15740,13 @@ public final class TypeCheckTest extends TypeCheckTestCase {
     // We assume that {Function} types can produce anything, and don't
     // want to type-check them.
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/**\n" +
-        " * @param {!Function} ctor\n" +
-        " * @return {MyType}\n" +
-        " */\n" +
-        "function f(ctor) { return new ctor(); }", null);
+        "goog.forwardDeclare('MyType');"
+            + "/**\n"
+            + " * @param {!Function} ctor\n"
+            + " * @return {MyType}\n"
+            + " */\n"
+            + "function f(ctor) { return new ctor(); }",
+        null);
   }
 
   @Test
@@ -15401,12 +15755,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
     // that aren't in their binaries. We want to make sure we can pass these
     // around, but still do other checks on them.
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MyType'], []);" +
-        "/**\n" +
-        " * @param {!Function} ctor\n" +
-        " * @return {MyType}\n" +
-        " */\n" +
-        "function f(ctor) { return (new ctor()).impossibleProp; }",
+        "goog.forwardDeclare('MyType');"
+            + "/**\n"
+            + " * @param {!Function} ctor\n"
+            + " * @return {MyType}\n"
+            + " */\n"
+            + "function f(ctor) { return (new ctor()).impossibleProp; }",
         "Property impossibleProp never defined on ?");
   }
 
@@ -15828,9 +16182,10 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testMissingProperty24() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MissingType'], []);" +
-        "/** @param {MissingType} x */" +
-        "function f(x) { x.impossible(); }", null);
+        "goog.forwardDeclare('MissingType');"
+            + "/** @param {MissingType} x */"
+            + "function f(x) { x.impossible(); }",
+        null);
   }
 
   @Test
@@ -15854,11 +16209,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testMissingProperty27() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MissingType'], []);" +
-        "/** @param {?MissingType} x */" +
-        "function f(x) {" +
-        "  for (var parent = x; parent; parent = parent.getParent()) {}" +
-        "}", null);
+        "goog.forwardDeclare('MissingType');"
+            + "/** @param {?MissingType} x */"
+            + "function f(x) {"
+            + "  for (var parent = x; parent; parent = parent.getParent()) {}"
+            + "}",
+        null);
   }
 
   @Test
@@ -16105,7 +16461,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testMissingProperty40a() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MissingType'], []);"
+        "goog.forwardDeclare('MissingType');"
             + "/** @param {MissingType} x */"
             + "function f(x) { x.impossible(); }",
         null);
@@ -16114,7 +16470,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testMissingProperty40b() {
     testClosureTypes(
-        "goog.addDependency('zzz.js', ['MissingType'], []);"
+        "goog.forwardDeclare('MissingType');"
             + "/** @param {(Array|MissingType)} x */"
             + "function f(x) { x.impossible(); }",
         // TODO(johnlenz): enable this.
@@ -16169,6 +16525,133 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "function f(/** !Object */ x) {", //
             "  if (x.y == null) throw new Error();",
             "}"));
+  }
+
+  // since optional chaining is a property test (tests for the existence of x.y), no warnings
+  // about missing properties are emitted
+  @Test
+  public void optionalChainGetPropAllowLoosePropertyAccess() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @param {?Object} x */", //
+            "function f(x) {", //
+            "  x.y?.z;", //
+            "}"));
+  }
+
+  // this is the same test as above except that it does not use optional chaining so it should
+  // emit a warning about missing properties
+  @Test
+  public void normalGetPropNotAllowLoosePropertyAccess() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @param {?Object} x */", //
+            "function f(x) {", //
+            "  x.y.z;", //
+            "}"),
+        "Property y never defined on Object");
+  }
+
+  // since optional chaining is a property test (tests for the existence of x.y), no warnings
+  // about missing properties are emitted
+  @Test
+  public void optionalChainGetElemAllowLoosePropertyAccess() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @param {?Object} x */", //
+            "function f(x) {", //
+            "  x.y?.[z];", //
+            "}"));
+  }
+
+  // this is the same test as above except that it does not use optional chaining so it should emit
+  // a warning about missing properties
+  @Test
+  public void normalGetElemNotAllowLoosePropertyAccess() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @param {?Object} x */", //
+            "function f(x) {", //
+            "  x.y[z];", //
+            "}"),
+        "Property y never defined on Object");
+  }
+
+  // since optional chaining is a property test (tests for the existence of x.y), no warnings
+  // about missing properties are emitted
+  @Test
+  public void optionalChainCallAllowLoosePropertyAccess() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @param {?Object} x */", //
+            "function f(x) {", //
+            "  x.y?.();", //
+            "}"));
+  }
+
+  // this is the same test as above except that it does not use optional chaining so it should emit
+  // a warning about missing properties
+  @Test
+  public void normalCallNotAllowLoosePropertyAccess() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @param {?Object} x */", //
+            "function f(x) {", //
+            "  x.y();", //
+            "}"),
+        "Property y never defined on Object");
+  }
+
+  // prop.access?.() is property test and should allow loose property access
+  // but x?.(prop.access) is not
+  @Test
+  public void getNotFirstChildOfOptionalCallNotAllowLoosePropertyAccess() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @param {?Object} x */", //
+            "function f(x) {", //
+            "  return false;", //
+            "}",
+            "f?.(x.y)"),
+        "Property y never defined on x");
+  }
+
+  // prop.access?.[x] is property test and should allow loose property access
+  // but x?.[prop.access] is not
+  @Test
+  public void getNotFirstChildOfOptionalGetElemNotAllowLoosePropertyAccess() {
+    disableStrictMissingPropertyChecks();
+    testTypes(
+        lines(
+            "/** @param {?Object} x */", //
+            "function f(x) {", //
+            "  x?.[y.z];", //
+            "}"),
+        "Property z never defined on y");
+  }
+
+  @Test
+  public void testOptChainGetPropProvidesThisForMethodCall() {
+    testTypes(
+        lines(
+            "class A {",
+            "  foo() {}",
+            "}",
+            "/** @param {?A} a */",
+            "function f(a) {",
+            // TypeCheck should not complain that foo() is getting called without a correctly typed
+            // `this` value.
+            "  a?.foo();",
+            "}",
+            "",
+            ""));
   }
 
   @Test
@@ -16542,25 +17025,26 @@ public final class TypeCheckTest extends TypeCheckTestCase {
 
   @Test
   public void testTemplateType5() {
-    compiler.getOptions().setCodingConvention(new GoogleCodingConvention());
     testTypes(
-        "var CGI_PARAM_RETRY_COUNT = 'rc';" +
-        "" +
-        "/**" +
-        " * @param {...T} p\n" +
-        " * @return {T} \n" +
-        " * @template T\n" +
-        " */\n" +
-        "function fn(p) { return p; }\n" +
-        "/** @type {!Object} */ var x;" +
-        "" +
-        "/** @return {void} */\n" +
-        "function aScope() {\n" +
-        "  x = fn(CGI_PARAM_RETRY_COUNT, 1);\n" +
-        "}",
-        "assignment\n" +
-        "found   : (number|string)\n" +
-        "required: Object");
+        lines(
+            "const CGI_PARAM_RETRY_COUNT = 'rc';",
+            "",
+            "/**",
+            " * @param {...T} p",
+            " * @return {T} ",
+            " * @template T",
+            " */",
+            "function fn(p) { return p; }",
+            "/** @type {!Object} */ var x;",
+            "",
+            "/** @return {void} */",
+            "function aScope() {",
+            "  x = fn(CGI_PARAM_RETRY_COUNT, 1);",
+            "}"),
+        lines(
+            "assignment", //
+            "found   : (number|string)",
+            "required: Object"));
   }
 
   @Test
@@ -16835,17 +17319,17 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testTemplateType19() {
     testTypes(
-        "/**\n" +
-        " * @param {T} t\n" +
-        " * @param {U} u\n" +
-        " * @return {{t:T, u:U}} \n" +
-        " * @template T,U\n" +
-        " */\n" +
-        "function fn(t, u) { return {t:t, u:u}; }\n" +
-        "/** @type {null} */ var x = fn(1, 'str');",
-        "initializing variable\n" +
-        "found   : {t: number, u: string}\n" +
-        "required: null");
+        "/**\n"
+            + " * @param {T} t\n"
+            + " * @param {U} u\n"
+            + " * @return {{t:T, u:U}} \n"
+            + " * @template T,U\n"
+            + " */\n"
+            + "function fn(t, u) { return {t:t, u:u}; }\n"
+            + "/** @type {null} */ var x = fn(1, 'str');",
+        "initializing variable\n"
+            + "found   : {\n  t: number,\n  u: string\n}\n"
+            + "required: null");
   }
 
   @Test
@@ -17010,8 +17494,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             " * @template T",
             " */",
             "function f(T) {}"),
-        "variable T redefined with type undefined, "
-            + "original definition at [testcode]:5 with type T");
+        "variable T redefined with type undefined, original definition at [testcode]:5 with type"
+            + " T");
   }
 
   @Test
@@ -17113,6 +17597,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testTemplateTypeForwardReference_declaredMissing() {
     compiler.forwardDeclareType("Foo");
+    compiler.forwardDeclareType("DoesNotExist");
     testTypes(
         lines(
             "/** @param {!Foo<DoesNotExist>} x */",
@@ -17163,15 +17648,14 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   @Test
   public void testTemplateTypeWithUnresolvedType() {
     testClosureTypes(
-        "var goog = {};\n" +
-        "goog.addDependency = function(a,b,c){};\n" +
-        "goog.addDependency('a.js', ['Color'], []);\n" +
-
-        "/** @interface @template T */ function C() {}\n" +
-        "/** @return {!Color} */ C.prototype.method;\n" +
-
-        "/** @constructor @implements {C} */ function D() {}\n" +
-        "/** @override */ D.prototype.method = function() {};", null);  // no warning expected.
+        "var goog = {};\n"
+            + "goog.forwardDeclare = function(a){};\n"
+            + "goog.forwardDeclare('Color');\n"
+            + "/** @interface @template T */ function C() {}\n"
+            + "/** @return {!Color} */ C.prototype.method;\n"
+            + "/** @constructor @implements {C} */ function D() {}\n"
+            + "/** @override */ D.prototype.method = function() {};",
+        null); // no warning expected.
   }
 
   @Test
@@ -18467,6 +18951,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
     enableReportUnknownTypes();
     testTypes("function id(x) { return x; }",
         "could not determine the type of this expression");
+  }
+
+  @Test
+  public void testUnknownTypeReport_allowsUnknownIfStatement() {
+    enableReportUnknownTypes();
+    testTypes("function id(x) { x; }");
   }
 
   @Test
@@ -20850,10 +21340,10 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "com1 = com2;"),
         lines(
             "assignment",
-            "found   : {fun: function((I7|null)): (C7|null), prop: {prop: (C7|null)}}",
-            "required: {fun: function((C7|null)): (I7|null), prop: {prop: (I7|null)}}",
+            "found   : {\n  fun: function((I7|null)): (C7|null),\n  prop: {prop: (C7|null)}\n}",
+            "required: {\n  fun: function((C7|null)): (I7|null),\n  prop: {prop: (I7|null)}\n}",
             "missing : []",
-        "mismatch: [fun,prop]"));
+            "mismatch: [fun,prop]"));
   }
 
   @Test
@@ -21352,10 +21842,9 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         lines(
             "initializing variable",
             "found   : Foo",
-            "required: {str: string, unknown: ?}",
+            "required: {\n  str: string,\n  unknown: ?\n}",
             "missing : [unknown]",
-            "mismatch: []"
-        ));
+            "mismatch: []"));
   }
 
   @Test
@@ -21379,7 +21868,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         lines(
             "initializing variable",
             "found   : Foo",
-            "required: {str: string, top: *}",
+            "required: {\n  str: string,\n  top: *\n}",
             "missing : [top]",
             "mismatch: []"));
   }
@@ -21673,7 +22162,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         lines(
             "assignment",
             "found   : {prop: (C2|null)}",
-            "required: {prop: (C|null), prop2: (C|null)}",
+            "required: {\n  prop: (C|null),\n  prop2: (C|null)\n}",
             "missing : [prop2]",
             "mismatch: []"));
   }
@@ -21738,8 +22227,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "r1 = r2;"),
         lines(
             "assignment",
-            "found   : {prop: (C2|null), prop2: (C|null)}",
-            "required: {prop: (C2|null), prop2: (C2|null)}",
+            "found   : {\n  prop: (C2|null),\n  prop2: (C|null)\n}",
+            "required: {\n  prop: (C2|null),\n  prop2: (C2|null)\n}",
             "missing : []",
             "mismatch: [prop2]"));
   }
@@ -21780,10 +22269,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "/** @type {!Foo} */",
             "var f = new Foo();",
             "f = r1;"),
-        lines(
-            "assignment",
-            "found   : {x: number, y: string}",
-            "required: Foo"));
+        lines("assignment", "found   : {\n  x: number,\n  y: string\n}", "required: Foo"));
   }
 
   @Test
@@ -22576,8 +23062,8 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "var ns = {};",
             "/** @type {{x:number}} */ ns.x;",
             "/** @type {{x:number, y:boolean}} */ ns.x;"),
-        "variable ns.x redefined with type {x: number, y: boolean}, "
-        + "original definition at [testcode]:2 with type {x: number}");
+        "variable ns.x redefined with type {\n  x: number,\n  y: boolean\n}, "
+            + "original definition at [testcode]:2 with type {x: number}");
   }
 
   @Test
@@ -22588,7 +23074,10 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "/** @record */ function rec3(){}",
             "/** @record */ function rec4(){}",
             "/** @type {!rec3} */ ns.x;",
-            "/** @type {!rec4} */ ns.x;"));
+            "/** @type {!rec4} */ ns.x;"),
+        ImmutableList.of(
+            "variable ns.x redefined with type rec4, original definition at [testcode]:4 with type"
+                + " rec3"));
   }
 
   @Test
@@ -22648,7 +23137,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "/** @type {{prop:number}} */ ns.x;",
             "",
             "/** @type {{prop:number}} */ ns.y;",
-            "/** @type {!rec} */ ns.y;"));
+            "/** @type {!rec} */ ns.y;"),
+        ImmutableList.of(
+            "variable ns.x redefined with type {prop: number}, original definition at [testcode]:5"
+                + " with type rec",
+            "variable ns.y redefined with type rec, original definition at [testcode]:8 with type"
+                + " {prop: number}"));
   }
 
   @Test
@@ -22664,8 +23158,11 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "",
             "/** @type {{prop:number}} */ ns.y;",
             "/** @type {!rec} */ ns.y;"),
-        "variable ns.x redefined with type {prop: string}, original "
-        + "definition at [testcode]:5 with type rec");
+        ImmutableList.of(
+            "variable ns.x redefined with type {prop: string}, original "
+                + "definition at [testcode]:5 with type rec",
+            "variable ns.y redefined with type rec, original definition at [testcode]:8 with type"
+                + " {prop: number}"));
   }
 
   @Test
@@ -22681,8 +23178,11 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "",
             "/** @type {{prop:number}} */ ns.y;",
             "/** @type {!rec} */ ns.y;"),
-        "variable ns.y redefined with type rec, original definition at "
-        + "[testcode]:8 with type {prop: number}");
+        ImmutableList.of(
+            "variable ns.x redefined with type {prop: string}, original definition at [testcode]:5"
+                + " with type rec",
+            "variable ns.y redefined with type rec, original definition at "
+                + "[testcode]:8 with type {prop: number}"));
   }
 
   @Test
@@ -22696,7 +23196,10 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "/** @type {I} */ rec.prototype.prop;",
             "",
             "/** @type {!rec} */ ns.x;",
-            "/** @type {{prop:I}} */ ns.x;"));
+            "/** @type {{prop:I}} */ ns.x;"),
+        ImmutableList.of(
+            "variable ns.x redefined with type {prop: (I|null)}, original definition at"
+                + " [testcode]:7 with type rec"));
   }
 
   @Test
@@ -22710,7 +23213,10 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "/** @type {I<number>} */ rec.prototype.prop;",
             "",
             "/** @type {!rec} */ ns.x;",
-            "/** @type {{prop:I<number>}} */ ns.x;"));
+            "/** @type {{prop:I<number>}} */ ns.x;"),
+        ImmutableList.of(
+            "variable ns.x redefined with type {prop: (I<number>|null)}, original definition at"
+                + " [testcode]:7 with type rec"));
   }
 
   @Test
@@ -23051,9 +23557,9 @@ public final class TypeCheckTest extends TypeCheckTestCase {
     testTypes(
         "var x = 1 < 'asdf';",
         lines(
-            "right side of numeric comparison",
+            "right side of numeric comparison", //
             "found   : string",
-            "required: number"));
+            "required: (bigint|number)"));
   }
 
   @Test
@@ -23107,6 +23613,410 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testBigIntArgument() {
+    testTypes("BigInt(1)");
+    testTypes(
+        "BigInt({})",
+        lines(
+            "actual parameter 1 of BigInt does not match formal parameter",
+            "found   : {}",
+            "required: (bigint|number|string)"));
+  }
+
+  @Test
+  public void testBigIntOperators_increment() {
+    testTypes("const x = 1n; x++;");
+    testTypes("/** @type {!BigInt} */ var x; x++;");
+    testTypes("/** @type {bigint|number} */var x; x++;");
+    testTypes(
+        "/** @type {bigint|string} */var x; x++;",
+        lines("increment/decrement", "found   : (bigint|string)", "required: (bigint|number)"));
+  }
+
+  @Test
+  public void testBigIntOperators_decrement() {
+    testTypes("const x = 1n; x--;");
+    testTypes("/** @type {!BigInt} */ var x; x--;");
+    testTypes("/** @type {bigint|number} */var x; x--;");
+    testTypes(
+        "/** @type {bigint|string} */var x; x--;",
+        lines("increment/decrement", "found   : (bigint|string)", "required: (bigint|number)"));
+  }
+
+  @Test
+  public void testBigIntOperators_logicalNot() {
+    testTypes("const x = 1n; !x;");
+    testTypes("/** @type {!BigInt} */ var x; !x;");
+    testTypes("/** @type {bigint|string} */var x; !x;");
+  }
+
+  @Test
+  public void testBigIntOperators_bitwiseNot() {
+    testTypes("const x = 1n; ~x;");
+    testTypes("/** @type {!BigInt} */ var x; ~x;");
+    testTypes("/** @type {?} */var x; ~x;");
+    testTypes("/** @type {bigint|number} */var x; ~x;");
+    testTypes(
+        "/** @type {bigint|string} */var x; ~x;",
+        lines(
+            "bitwise NOT", //
+            "found   : (bigint|string)",
+            "required: (bigint|number)"));
+  }
+
+  @Test
+  public void testBigIntValueOperators_unaryPlusIsForbidden() {
+    testTypes("var x = 1n; +x;", "unary operator + cannot be applied to bigint");
+  }
+
+  @Test
+  public void testBigIntObjectOperators_unaryPlusIsForbidden() {
+    testTypes("/** @type {!BigInt} */ var x; +x;", "unary operator + cannot be applied to BigInt");
+  }
+
+  @Test
+  public void testBigIntUnionOperators_unaryPlusIsForbidden() {
+    testTypes(
+        "/** @type {bigint|number} */ var x; +x;",
+        "unary operator + cannot be applied to (bigint|number)");
+  }
+
+  @Test
+  public void testBigIntEnumOperators_unaryPlusIsForbidden() {
+    testTypes(
+        "/** @enum {bigint} */ const BIGINTS = {ONE: 1n, TWO: 2n}; +BIGINTS.ONE;",
+        "unary operator + cannot be applied to BIGINTS<bigint>");
+  }
+
+  @Test
+  public void testBigIntOperators_unaryMinus() {
+    testTypes("const x = 1n; -x;");
+    testTypes("/** @type {!BigInt} */ var x; -x;");
+    testTypes("/** @type {?} */var x; -x;");
+    testTypes("/** @type {bigint|number} */var x; -x;");
+    testTypes(
+        "/** @type {bigint|string} */var x; -x;",
+        lines("unary minus operator", "found   : (bigint|string)", "required: (bigint|number)"));
+  }
+
+  @Test
+  public void testBigIntOperators_binaryOperationWithSelf() {
+    testTypes("const x = 1n; const y = 1n; x * y");
+  }
+
+  @Test
+  public void testBigIntOperators_assignOpWithSelf() {
+    testTypes("const x = 1n; const y = 1n; x *= y");
+  }
+
+  @Test
+  public void testBigIntOperators_binaryBitwiseOperationWithSelf() {
+    testTypes("const x = 1n; const y = 1n; x | y");
+  }
+
+  @Test
+  public void testBigIntOperators_additionWithString() {
+    testTypes("const x = 1n; const y = 'str'; x + y");
+  }
+
+  @Test
+  public void testBigIntOperators_assignAddWithString() {
+    testTypes("const x = 1n; const y = 'str'; x += y");
+  }
+
+  @Test
+  public void testBigIntOperators_binaryOperationWithString() {
+    testTypes(
+        "const x = 1n; const y = 'str'; x * y",
+        "operator * cannot be applied to bigint and string");
+  }
+
+  @Test
+  public void testBigIntOperators_assignOpWithString() {
+    testTypes(
+        "const x = 1n; const y = 'str'; x *= y",
+        "operator *= cannot be applied to bigint and string");
+  }
+
+  @Test
+  public void testBigIntOperators_binaryOperationWithUnknown() {
+    testTypes(
+        "var x = 1n; /** @type {?} */var y; x * y", "operator * cannot be applied to bigint and ?");
+  }
+
+  @Test
+  public void testBigIntOperators_assignOpWithUnknown() {
+    testTypes(
+        "var x = 1n; /** @type {?} */var y; x *= y",
+        "operator *= cannot be applied to bigint and ?");
+  }
+
+  @Test
+  public void testBigIntOperators_binaryOperationWithNumber() {
+    testTypes(
+        "const x = 1n; const y = 1; x * y", "operator * cannot be applied to bigint and number");
+  }
+
+  @Test
+  public void testBigIntOperators_assignOpWithNumber() {
+    testTypes(
+        "const x = 1n; const y = 1; x *= y", "operator *= cannot be applied to bigint and number");
+  }
+
+  @Test
+  public void testBigIntOperators_binaryBitwiseOperationWithNumber() {
+    testTypes(
+        "const x = 1n; const y = 1; x | y", "operator | cannot be applied to bigint and number");
+  }
+
+  @Test
+  public void testBigIntLeftShift() {
+    testTypes("1n << 2n");
+    testTypes("let x = 1n; x <<= 2n");
+  }
+
+  @Test
+  public void testBigIntRightShift() {
+    testTypes("2n >> 1n");
+    testTypes("let x = 2n; x >>= 1n");
+  }
+
+  @Test
+  public void testBigIntOperators_unsignedRightShift() {
+    testTypes("const x = 1n; x >>> x;", "operator >>> cannot be applied to bigint and bigint");
+  }
+
+  @Test
+  public void testBigIntOperators_assignUnsignedRightShift() {
+    testTypes("let x = 1n; x >>>= x;", "operator >>>= cannot be applied to bigint and bigint");
+  }
+
+  @Test
+  public void testBigIntOrNumberOperators_binaryOperationWithSelf() {
+    testTypes("/** @type {bigint|number} */ var x; x * x;");
+  }
+
+  @Test
+  public void testBigIntOrNumberOperators_assignOpWithSelf() {
+    testTypes("/** @type {bigint|number} */ var x; x *= x;");
+  }
+
+  @Test
+  public void testBigIntOrNumberOperators_binaryBitwiseOperationWithSelf() {
+    testTypes("/** @type {bigint|number} */ var x; x | x;");
+  }
+
+  @Test
+  public void testBigIntOrNumberOperators_binaryOperationWithBigInt() {
+    testTypes(
+        "var x = 1n; /** @type {bigint|number} */ var y; x * y;",
+        "operator * cannot be applied to bigint and (bigint|number)");
+  }
+
+  @Test
+  public void testBigIntOrNumberOperators_assignOpWithBigInt() {
+    testTypes(
+        "var x = 1n; /** @type {bigint|number} */ var y; x *= y;",
+        "operator *= cannot be applied to bigint and (bigint|number)");
+  }
+
+  @Test
+  public void testBigIntOrNumberOperators_binaryBitwiseOperationWithBigInt() {
+    testTypes(
+        "var x = 1n; /** @type {bigint|number} */ var y; x | y;",
+        "operator | cannot be applied to bigint and (bigint|number)");
+  }
+
+  @Test
+  public void testBigIntOrNumberOperators_unsignedRightShift() {
+    testTypes(
+        "/** @type {bigint|number} */ var x = 1n; x >>> x;",
+        "operator >>> cannot be applied to (bigint|number) and (bigint|number)");
+  }
+
+  @Test
+  public void testBigIntOrNumberOperators_assignUnsignedRightShift() {
+    testTypes(
+        "/** @type {bigint|number} */ var x = 1n; x >>>= x;",
+        "operator >>>= cannot be applied to (bigint|number) and (bigint|number)");
+  }
+
+  @Test
+  public void testBigIntOrOtherOperators_binaryOperationWithBigInt() {
+    testTypes(
+        "/** @type {bigint|string} */ var x; var y = 1n; x * y;",
+        "operator * cannot be applied to (bigint|string) and bigint");
+  }
+
+  @Test
+  public void testBigIntOrOtherOperators_assignOpWithBigInt() {
+    testTypes(
+        "/** @type {bigint|string} */ var x; var y = 1n; x *= y;",
+        "operator *= cannot be applied to (bigint|string) and bigint");
+  }
+
+  @Test
+  public void testBigIntOrOtherOperators_binaryOperationWithBigIntOrNumber() {
+    testTypes(
+        "/** @type {bigint|string} */ var x; /** @type {bigint|number} */ var y; x * y;",
+        "operator * cannot be applied to (bigint|string) and (bigint|number)");
+  }
+
+  @Test
+  public void testBigIntOrOtherOperators_assignOpWithBigIntOrNumber() {
+    testTypes(
+        "/** @type {bigint|string} */ var x; /** @type {bigint|number} */ var y; x *= y;",
+        "operator *= cannot be applied to (bigint|string) and (bigint|number)");
+  }
+
+  @Test
+  public void testBigIntEnumOperators_binaryOperationWithSelf() {
+    testTypes(
+        "/** @enum {bigint} */ const BIGINTS = {ONE: 1n, TWO: 2n}; BIGINTS.ONE * BIGINTS.TWO;");
+  }
+
+  @Test
+  public void testBigIntEnumOperators_assignOpWithSelf() {
+    testTypes(
+        "/** @enum {bigint} */ const BIGINTS = {ONE: 1n, TWO: 2n}; BIGINTS.ONE *= BIGINTS.TWO;");
+  }
+
+  @Test
+  public void testValidBigIntComparisons() {
+    testTypes("var x = 1n; var y = 2n; x < y");
+    testTypes("var x = 1n; /** @type {!BigInt} */ var y; x < y");
+    testTypes("var x = 1n; var y = 2; x < y");
+    testTypes("var x = 1n; /** @type {?} */ var y; x < y");
+  }
+
+  @Test
+  public void testBigIntComparisonWithString() {
+    testTypes(
+        "const x = 1n; const y = 'asdf'; x < y;",
+        lines(
+            "right side of numeric comparison", //
+            "found   : string",
+            "required: (bigint|number)"));
+  }
+
+  @Test
+  public void testValidBigIntObjectComparisons() {
+    testTypes("/** @type {!BigInt} */ var x; var y = 2n; x < y");
+    testTypes("/** @type {!BigInt} */ var x; /** @type {!BigInt} */ var y; x < y");
+    testTypes("/** @type {!BigInt} */ var x; var y = 2; x < y");
+    testTypes("/** @type {!BigInt} */ var x; /** @type {?} */ var y; x < y");
+  }
+
+  @Test
+  public void testValidBigIntOrNumberComparisons() {
+    testTypes("/** @type {bigint|number} */ var x; /** @type {bigint|number} */ var y; x < y;");
+    testTypes("/** @type {bigint|number} */ var x; var y = 2; x < y;");
+    testTypes("/** @type {bigint|number} */ var x; var y = 2n; x < y;");
+    testTypes("/** @type {bigint|number} */ var x; /** @type {!BigInt} */ var y; x < y;");
+    testTypes("/** @type {bigint|number} */ var x; /** @type {?} */ var y; x < y");
+  }
+
+  @Test
+  public void testBigIntOrNumberComparisonWithString() {
+    testTypes(
+        "/** @type {bigint|number} */ var x; 'asdf' < x;",
+        lines(
+            "left side of numeric comparison", //
+            "found   : string",
+            "required: (bigint|number)"));
+  }
+
+  @Test
+  public void testValidBigIntOrOtherComparisons() {
+    testTypes("/** @type {bigint|string} */ var x; /** @type {bigint|string} */ var y; x < y;");
+    testTypes("/** @type {bigint|string} */ var x; /** @type {?} */ var y; x < y");
+  }
+
+  @Test
+  public void testBigIntOrOtherComparisonWithBigint() {
+    testTypes(
+        "/** @type {bigint|string} */ var x; var y = 2n; x < y;",
+        lines(
+            "left side of numeric comparison",
+            "found   : (bigint|string)",
+            "required: (bigint|number)"));
+  }
+
+  @Test
+  public void testBigIntOrOtherComparisonWithNumber() {
+    testTypes(
+        "/** @type {bigint|string} */ var x; var y = 2; x < y;",
+        lines(
+            "left side of numeric comparison",
+            "found   : (bigint|string)",
+            "required: (bigint|number)"));
+  }
+
+  @Test
+  public void testBigIntObjectIndex() {
+    // As is, TypeCheck allows for objects to be indexed with bigint. An error could be reported as
+    // is done with arrays, but for now we will avoid such restrictions.
+    testTypes(
+        lines(
+            "var obj = {};",
+            "/** @type {bigint} */ var b;",
+            "/** @type {bigint|number} */ var bn;",
+            "obj[b] = 1;",
+            "obj[bn] = 3;"));
+  }
+
+  @Test
+  public void testBigIntArrayIndex() {
+    // Even though the spec doesn't prohibit using bigint as an array index, we will report an error
+    // to maintain consistency with TypeScript.
+    testTypes(
+        "var arr = []; /** @type {bigint} */ var b; arr[b];",
+        lines(
+            "restricted index type", //
+            "found   : bigint",
+            "required: number"));
+  }
+
+  @Test
+  public void testBigIntConstructorWithNew() {
+    // BigInt object function type cannot be called with "new" keyword
+    testTypes("new BigInt(1)", "cannot instantiate non-constructor");
+  }
+
+  @Test
+  public void testBigIntOrNumberArrayIndex() {
+    // Even though the spec doesn't prohibit using bigint as an array index, we will report an error
+    // to maintain consistency with TypeScript.
+    testTypes(
+        "var arr = []; /** @type {bigint|number} */ var bn; arr[bn];",
+        lines(
+            "restricted index type", //
+            "found   : (bigint|number)",
+            "required: number"));
+  }
+
+  @Test
+  public void testBigIntAsComputedPropForObjects() {
+    testTypes("/** @type {bigint} */ var x; ({[x]: 'value', 123n() {}});");
+  }
+
+  @Test
+  public void testBigIntAsComputedPropForClasses() {
+    testTypes("/** @unrestricted */ class C { 123n() {} }");
+    testTypes("/** @dict */ class C { 123n() {} }");
+  }
+
+  @Test
+  public void testBigIntAsComputedPropForStructClasses() {
+    testTypes("class C { 123n() {} }", "Cannot do '[]' access on a struct");
+  }
+
+  @Test
+  public void testBigIntLiteralProperty() {
+    testTypesWithExterns(new TestExternsBuilder().addBigInt().build(), "(1n).toString()");
+  }
+
+  @Test
   public void testStrictComparison1() {
     testTypes(
         "var x = true < 'asdf';",
@@ -23126,6 +24036,16 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testComparisonWithUnknownAndSymbol() {
+    testTypes(
+        "/** @type {symbol} */ var x; /** @type {?} */ var y; x < y",
+        lines(
+            "left side of comparison", //
+            "found   : symbol",
+            "required: (bigint|number|string)"));
+  }
+
+  @Test
   public void testComparisonInStrictModeNoSpuriousWarning() {
     testTypes(
         lines(
@@ -23142,15 +24062,15 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         DiagnosticGroups.STRICT_PRIMITIVE_OPERATORS, CheckLevel.OFF);
     testTypes(
         lines(
-        "/** @constructor */",
-        "function Foo() {}",
-        "function f(/** ? */ x) {",
-        "  return (new Foo) < x;",
-        "}"),
+            "/** @constructor */",
+            "function Foo() {}",
+            "function f(/** ? */ x) {",
+            "  return (new Foo) < x;",
+            "}"),
         lines(
-            "left side of comparison",
+            "left side of comparison", //
             "found   : Foo",
-            "required: (number|string)"));
+            "required: (bigint|number|string)"));
   }
 
   @Test
@@ -23160,15 +24080,15 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         DiagnosticGroups.STRICT_PRIMITIVE_OPERATORS, CheckLevel.OFF);
     testTypes(
         lines(
-        "/** @constructor */",
-        "function Bar() {}",
-        "function f(/** ? */ x) {",
-        "  return x < (new Bar);",
-        "}"),
+            "/** @constructor */",
+            "function Bar() {}",
+            "function f(/** ? */ x) {",
+            "  return x < (new Bar);",
+            "}"),
         lines(
-            "right side of comparison",
+            "right side of comparison", //
             "found   : Bar",
-            "required: (number|string)"));
+            "required: (bigint|number|string)"));
   }
 
   @Test
@@ -23634,10 +24554,12 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             // Verify that ns.fn resolves to the locally assigned ns.fn, not the global ns.fn.
             "  ns.fn(0);",
             "}"),
-        lines(
-            "actual parameter 1 of Namespace.fn does not match formal parameter",
-            "found   : number",
-            "required: string"));
+        ImmutableList.of(
+            "Property fn never defined on Namespace",
+            lines(
+                "actual parameter 1 of ns.fn does not match formal parameter",
+                "found   : number",
+                "required: string")));
   }
 
   @Test
@@ -23810,7 +24732,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   public void testTypeofType_notInScope() {
     testTypes(
         "var /** typeof ns */ x;",
-        "Parse error. Missing type for `typeof` value. The value must be declared and const.");
+        "Missing type for `typeof` value. The value must be declared and const.");
   }
 
   @Test
@@ -23827,6 +24749,18 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         lines(
             "/** @const */ var ns = {};", //
             "var /** typeof ns */ x = {};"),
+        lines(
+            "initializing variable", //
+            "found   : {}",
+            "required: {}"));
+  }
+
+  @Test
+  public void testTypeofType_namespaceForwardReferenceMismatch() {
+    testTypes(
+        lines(
+            "var /** typeof ns */ x = {};", //
+            "/** @const */ var ns = {};"),
         lines(
             "initializing variable", //
             "found   : {}",
@@ -23979,7 +24913,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   public void testTypeofType_unknownType() {
     testTypes(
         lines("var /** ? */ x;", "/** @type {typeof x} */ var y;"),
-        "Parse error. Missing type for `typeof` value. The value must be declared and const.");
+        "Missing type for `typeof` value. The value must be declared and const.");
   }
 
   @Test
@@ -24004,7 +24938,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         lines(
             "/** @const */ var ns = {};",
             "/** @const {typeof ns.Foo} */ var Foo = /** @type {?} */ (x);"),
-        "Parse error. Missing type for `typeof` value. The value must be declared and const.");
+        "Missing type for `typeof` value. The value must be declared and const.");
   }
 
   @Test
@@ -24063,8 +24997,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "var g = function (/** typeof x */ a) {}",
             "x = 'str';",
             "g(null);"),
-        lines(
-            "Parse error. Missing type for `typeof` value. The value must be declared and const."));
+        lines("Missing type for `typeof` value. The value must be declared and const."));
   }
 
   @Test
@@ -24077,8 +25010,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "  x = 'str';",
             "  g(null);",
             "}"),
-        lines(
-            "Parse error. Missing type for `typeof` value. The value must be declared and const."));
+        lines("Missing type for `typeof` value. The value must be declared and const."));
   }
 
   @Test
@@ -24108,8 +25040,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "  x = 'str';",
             "  g(null);",
             "}"),
-        lines(
-            "Parse error. Missing type for `typeof` value. The value must be declared and const."));
+        lines("Missing type for `typeof` value. The value must be declared and const."));
   }
 
   @Test
@@ -24139,8 +25070,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
             "  var g = null",
             "  x = 'str';",
             "}"),
-        lines(
-            "Parse error. Missing type for `typeof` value. The value must be declared and const."));
+        lines("Missing type for `typeof` value. The value must be declared and const."));
   }
 
   @Test
@@ -24788,7 +25718,7 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         "const Y = {A: 0, B: 1}; /** @enum {number} */ const X = Y;",
         lines(
             "initializing variable", //
-            "found   : {A: number, B: number}",
+            "found   : {\n  A: number,\n  B: number\n}",
             "required: enum{X}"));
   }
 
@@ -24854,6 +25784,42 @@ public final class TypeCheckTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testBangOperatorOnIndirectlyForwardReferencedType() {
+    testTypes(
+        lines(
+            "/** @return {!b.Foo} */",
+            "function f() {}",
+            "/** @const {!b.Foo} */",
+            "var x = f();",
+            "",
+            "const a = {};",
+            "/** @typedef {?number} */",
+            "a.Foo;",
+            "const b = a;",
+            ""));
+  }
+
+  @Test
+  public void testBangOperatorOnIndirectlyForwardReferencedType_mismatch() {
+    testTypes(
+        lines(
+            "/** @return {?b.Foo} */",
+            "function f() {}",
+            "/** @const {!b.Foo} */",
+            "var x = f();",
+            "",
+            "const a = {};",
+            "/** @typedef {?number} */",
+            "a.Foo;",
+            "const b = a;",
+            ""),
+        lines(
+            "initializing variable", //
+            "found   : (null|number)",
+            "required: number"));
+  }
+
+  @Test
   public void testBangOperatorOnTypedefForShadowedNamespace() {
     // NOTE: This is a pattern used to work around the fact that @ngInjected constructors very
     // frequently (and unavoidably) shadow global namespaces (i.e. angular.modules) with constructor
@@ -24896,6 +25862,92 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         "Property bar never defined on Foo");
   }
 
+  @Test
+  public void testGenericConstructorCrash() {
+    testTypes(
+        lines(
+            "/** @template T */",
+            "class Base {",
+            " /**",
+            "  * @param {(function(function(new: T, ...?)): T)=} instantiate",
+            "  * @return {!Array<T>}",
+            "  */",
+            " delegates(instantiate = undefined) {",
+            "   return [instantiate];",
+            " };",
+            "}",
+            "class Bar {}",
+            "class Foo {}",
+            "",
+            "/** @type {Base<Foo|Bar>} */",
+            "const c = new Base();",
+            "",
+            "c.delegates(ctor => new ctor(42));"));
+  }
+
+  @Test
+  public void testLegacyGoogModuleExportTypecheckedAgainstGlobal_simpleModuleId() {
+    testTypesWithExtraExterns(
+        lines(
+            "/** @const @suppress {duplicate} */",
+            "var globalNs = {};",
+            "/** @const */",
+            "var goog = {};",
+            "goog.module = function(ns) {};",
+            "goog.module.declareLegacyNamespace = function() {};"),
+        lines(
+            "goog.module('globalNs');", //
+            "goog.module.declareLegacyNamespace();",
+            "exports = 0;"),
+        lines(
+            "legacy goog.module export", //
+            "found   : number",
+            "required: {}"));
+  }
+
+  @Test
+  public void testLegacyGoogModuleExportTypecheckedAgainstGlobal_simpleModuleIdWithProperties() {
+    testTypesWithExtraExterns(
+        lines(
+            "/** @const @suppress {duplicate} */",
+            "var globalNs = {};",
+            "/** @const */",
+            "var goog = {};",
+            "goog.module = function(ns) {};",
+            "goog.module.declareLegacyNamespace = function() {};"),
+        lines(
+            "goog.module('globalNs');", //
+            "goog.module.declareLegacyNamespace();",
+            "exports.prop = 0;"),
+        lines(
+            "legacy goog.module export", //
+            "found   : {prop: number}",
+            "required: {}"));
+  }
+
+  @Test
+  public void testLegacyGoogModuleExportTypecheckedAgainstGlobal_dottedModuleId() {
+    testTypesWithExtraExterns(
+        lines(
+            "/** @const @suppress {duplicate} */",
+            "var globalNs = {};",
+            "/** @suppress {duplicate} */",
+            "globalNs.Ctor = class {};",
+            "/** @const */",
+            "var goog = {};",
+            "goog.module = function(ns) {};",
+            "goog.module.declareLegacyNamespace = function() {};"),
+        lines(
+            "goog.module('globalNs.Ctor');",
+            "goog.module.declareLegacyNamespace();",
+            "class Ctor {}",
+            "exports = Ctor;"),
+        lines(
+            "assignment to property Ctor of globalNs",
+            "found   : (typeof Ctor)",
+            "required: (typeof globalNs.Ctor)"));
+  }
+
   private void testClosureTypes(String js, String description) {
     testClosureTypesMultipleWarnings(js,
         description == null ? null : ImmutableList.of(description));
@@ -24911,9 +25963,9 @@ public final class TypeCheckTest extends TypeCheckTestCase {
         .that(compiler.getErrorCount())
         .isEqualTo(0);
 
-    // For processing goog.addDependency for forward typedefs.
+    // For processing goog.forwardDeclare for forward typedefs.
     new ProcessClosurePrimitives(compiler, null).process(externs, jsRoot);
-    new ProcessClosureProvidesAndRequires(compiler, null, CheckLevel.ERROR, false)
+    new ProcessClosureProvidesAndRequires(compiler, null, CheckLevel.ERROR, false, null)
         .process(externs, jsRoot);
 
     new TypeCheck(

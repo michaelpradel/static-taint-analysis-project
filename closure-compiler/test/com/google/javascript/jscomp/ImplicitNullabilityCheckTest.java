@@ -46,6 +46,7 @@ public final class ImplicitNullabilityCheckTest extends CompilerTestCase {
 
   @Test
   public void testExplicitJsdocDoesntWarn() {
+    noWarning("/** @type {bigint} */ var x;");
     noWarning("/** @type {boolean} */ var x;");
     noWarning("/** @type {symbol} */ var x;");
     noWarning("/** @type {null} */ var x;");
@@ -53,7 +54,7 @@ public final class ImplicitNullabilityCheckTest extends CompilerTestCase {
     noWarning("/** @type {?Object} */ var x;");
     noWarning("/** @type {function(new:Object)} */ function f(){}");
     noWarning("/** @type {function(this:Object)} */ function f(){}");
-    noWarning("/** @typedef {!Object} */ var Obj; var /** Obj */ x;");
+    noWarning("/** @typedef {!Object} */ var Obj; var /** ?Obj */ x;");
 
     // Test let and const
     noWarning("/** @type {boolean} */ let x;");
@@ -101,6 +102,25 @@ public final class ImplicitNullabilityCheckTest extends CompilerTestCase {
   public void testNullableTypedef() {
     // Arguable whether or not this deserves a warning
     warnImplicitlyNullable("/** @typedef {?number} */ var Num; var /** Num */ x;");
+  }
+
+  @Test
+  public void testNonnullTypedef() {
+    test(
+        srcs("/** @typedef {number} */ var Num; var /** Num */ x;"),
+        warning(ImplicitNullabilityCheck.IMPLICITLY_NONNULL_JSDOC));
+  }
+
+  @Test
+  public void testNonnullEnum() {
+    test(
+        srcs("/** @enum {number} */ var Enum = {NUM: 0}; var /** Enum */ x;"),
+        warning(ImplicitNullabilityCheck.IMPLICITLY_NONNULL_JSDOC));
+  }
+
+  @Test
+  public void testNonnullRecordType() {
+    noWarning("var /** {x: number} */ o;");
   }
 
   @Test

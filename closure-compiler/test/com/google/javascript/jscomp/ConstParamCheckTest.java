@@ -82,6 +82,24 @@ public final class ConstParamCheckTest extends CompilerTestCase {
   }
 
   @Test
+  public void testTemplateLiteralSubstitutesConstTemplate() {
+    testNoWarning(
+        CLOSURE_DEFS
+            + "var BAR = `bar`;" // An ESLint template
+            + "var FOO = `foo ${BAR}`;"
+            + "goog.string.Const.from(FOO);");
+  }
+
+  @Test
+  public void testTemplateLiteralSubstitutesConstString() {
+    testNoWarning(
+        CLOSURE_DEFS
+            + "var BAR = 'bar';" // A string literal
+            + "var FOO = `foo ${BAR}`;"
+            + "goog.string.Const.from(FOO);");
+  }
+
+  @Test
   public void testConcatenatedStringLiteralArgument() {
     testSame(CLOSURE_DEFS
         + "goog.string.Const.from('foo' + 'bar' + 'baz');");
@@ -137,6 +155,16 @@ public final class ConstParamCheckTest extends CompilerTestCase {
   @Test
   public void testStringLiteralTernaryArgument() {
     testSame(CLOSURE_DEFS + "var a = false;" + "goog.string.Const.from(a ? 'foo' : 'bar');");
+  }
+
+  @Test
+  public void testNullishCoalesceArgument() {
+    setLanguage(LanguageMode.UNSUPPORTED, LanguageMode.UNSUPPORTED);
+    // Although `'foo' ?? 'bar'` does definitely resolve to a string literal, it's also
+    // nonsensical code to put into a const declaration, so it deserves an error.
+    testError(
+        CLOSURE_DEFS + "goog.string.Const.from('foo' ?? 'bar');",
+        ConstParamCheck.CONST_NOT_STRING_LITERAL_ERROR);
   }
 
   @Test

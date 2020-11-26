@@ -115,6 +115,7 @@ class PeepholeSubstituteAlternateSyntax
       case BITOR:
       case BITXOR:
       case BITAND:
+      case COALESCE:
         return tryRotateAssociativeOperator(node);
 
       default:
@@ -130,9 +131,8 @@ class PeepholeSubstituteAlternateSyntax
       "Math");
 
   private Node tryMinimizeWindowRefs(Node node) {
-    // Normalization needs to be done to ensure there's no shadowing. The window prefix is also
-    // required if the global externs are not on the window.
-    if (!isASTNormalized() || !areDeclaredGlobalExternsOnWindow()) {
+    // Normalization needs to be done to ensure there's no shadowing.
+    if (!isASTNormalized()) {
       return node;
     }
 
@@ -151,7 +151,9 @@ class PeepholeSubstituteAlternateSyntax
         newNameNode.useSourceInfoFrom(stringNode);
         parentNode.replaceChild(node, newNameNode);
 
-        if (parentNode.isCall()) {
+        if (parentNode.isCall() || parentNode.isOptChainCall()) {
+          // e.g. when converting `window.Array?.()` to `Array?.()`, ensure that the
+          // OPTCHAIN_CALL gets marked as `FREE_CALL`
           parentNode.putBooleanProp(Node.FREE_CALL, true);
         }
         reportChangeToEnclosingScope(parentNode);
@@ -171,8 +173,8 @@ class PeepholeSubstituteAlternateSyntax
     Node rhs = n.getLastChild();
     if (n.getToken() == rhs.getToken()) {
       // Transform a * (b * c) to a * b * c
-      Node first = n.getFirstChild().detach();
-      Node second = rhs.getFirstChild().detach();
+      Node first = n.removeFirstChild();
+      Node second = rhs.removeFirstChild();
       Node third = rhs.getLastChild().detach();
       Node newLhs = new Node(n.getToken(), first, second).useSourceInfoIfMissingFrom(n);
       Node newRoot = new Node(rhs.getToken(), newLhs, third).useSourceInfoIfMissingFrom(rhs);
@@ -526,16 +528,16 @@ class PeepholeSubstituteAlternateSyntax
       return n;
     }
 
-    if (// is pattern folded
-        pattern.isString()
-        // make sure empty pattern doesn't fold to //
+    if ( // is pattern folded
+    pattern.isString()
+        // make sure empty pattern doesn't fold to a comment //
         && !"".equals(pattern.getString())
-
+        // make sure empty pattern doesn't fold to a comment /*
+        && !pattern.getString().startsWith("*")
         && (null == flags || flags.isString())
         // don't escape patterns with Unicode escapes since Safari behaves badly
         // (read can't parse or crashes) on regex literals with Unicode escapes
-        && (isEcmaScript5OrGreater()
-            || !containsUnicodeEscape(pattern.getString()))) {
+        && (isEcmaScript5OrGreater() || !containsUnicodeEscape(pattern.getString()))) {
 
       // Make sure that / is escaped, so that it will fit safely in /brackets/
       // and make sure that no LineTerminatorCharacters appear literally inside
@@ -596,7 +598,7 @@ class PeepholeSubstituteAlternateSyntax
         case LT:
         case NE:
           Node number = IR.number(n.isTrue() ? 1 : 0);
-          n.getParent().replaceChild(n, number);
+          n.replaceWith(number);
           reportChangeToEnclosingScope(number);
           return number;
         default:

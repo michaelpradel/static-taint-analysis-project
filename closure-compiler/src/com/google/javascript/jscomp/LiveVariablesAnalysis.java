@@ -209,7 +209,7 @@ class LiveVariablesAnalysis
 
     // Make kills conditional if the node can end abruptly by an exception.
     boolean conditional = false;
-    List<DiGraphEdge<Node, Branch>> edgeList = getCfg().getOutEdges(node);
+    List<? extends DiGraphEdge<Node, Branch>> edgeList = getCfg().getOutEdges(node);
     for (DiGraphEdge<Node, Branch> edge : edgeList) {
       if (Branch.ON_EX.equals(edge.getValue())) {
         conditional = true;
@@ -297,9 +297,21 @@ class LiveVariablesAnalysis
 
       case AND:
       case OR:
+      case COALESCE:
+      case OPTCHAIN_GETELEM:
+      case OPTCHAIN_GETPROP:
         computeGenKill(n.getFirstChild(), gen, kill, conditional);
         // May short circuit.
         computeGenKill(n.getLastChild(), gen, kill, true);
+        return;
+
+      case OPTCHAIN_CALL:
+        computeGenKill(n.getFirstChild(), gen, kill, conditional);
+        // Unlike OPTCHAIN_GETPROP and OPTCHAIN_GETELEM, the OPTCHAIN_CALLs can have multiple
+        // children on rhs which get executed conditionally
+        for (Node c = n.getSecondChild(); c != null; c = c.getNext()) {
+          computeGenKill(c, gen, kill, true);
+        }
         return;
 
       case HOOK:

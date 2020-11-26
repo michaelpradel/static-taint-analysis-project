@@ -17,6 +17,7 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.javascript.jscomp.CompilerTestCase.lines;
 
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
@@ -213,6 +214,46 @@ public final class TemplateAstMatcherTest {
     assertNotMatch(pair.templateNode, pair.testNode.getFirstFirstChild());
     assertMatch(pair.templateNode, pair.testNode.getFirstFirstChild().getFirstChild());
     assertNotMatch(pair.templateNode, pair.testNode.getSecondChild());
+  }
+
+  @Test
+  public void testMatches_againstUnresolvedType_fromTemplate_withImplicitNullability_noMatch() {
+    assertMatches_againstUnresolvedType_fromTemplate_withTypeModifier("");
+  }
+
+  @Test
+  public void testMatches_againstUnresolvedType_fromTemplate_withBangNullability_noMatch() {
+    assertMatches_againstUnresolvedType_fromTemplate_withTypeModifier("!");
+  }
+
+  @Test
+  public void testMatches_againstUnresolvedType_fromTemplate_withQmarkNullability_noMatch() {
+    assertMatches_againstUnresolvedType_fromTemplate_withTypeModifier("?");
+  }
+
+  @Test
+  public void testMatches_againstUnresolvedType_fromTemplate_inUnion_noMatch() {
+    // TODO(b/146173738): consider making this a match. It's certain that `str` is a subtype of
+    // the union `!Some.Missing.Type|string`, even though the compiler does not know what type
+    // `Some.Missing.Type` is.
+    assertMatches_againstUnresolvedType_fromTemplate_withTypeModifier("string|?");
+  }
+
+  private void assertMatches_againstUnresolvedType_fromTemplate_withTypeModifier(String modifier) {
+    TestNodePair pair =
+        compile(
+            "",
+            lines(
+                "",
+                "/**",
+                " * @param {" + modifier + "Some.Missing.Type} foo",
+                " */",
+                "function template(foo) {",
+                "  foo;",
+                "}"),
+            "'str'");
+    assertNotMatch(pair.templateNode, pair.getTestExprResultRoot());
+    assertNotMatch(pair.templateNode, pair.getTestExprResultRoot().getFirstChild());
   }
 
   @Test
@@ -533,6 +574,31 @@ public final class TemplateAstMatcherTest {
         TypeMatchingStrategy.EXACT);
   }
 
+  @Test
+  public void testMatches_namespace_method() {
+    String externs =
+        lines(
+            "",
+            "/** @const */ const ns = {};",
+            "/** @const */ ns.sub = {};",
+            "/** @return {boolean} */ ns.sub.method = function() {};",
+            "");
+
+    String template =
+        lines(
+            "/**",
+            " * @param {typeof ns.sub} target",
+            " */",
+            "function template(target) {",
+            "  target.method();",
+            "}");
+
+    TestNodePair pair = compile(externs, template, "var alias = ns.sub; alias.method();");
+    assertNotMatch(pair.templateNode, pair.testNode.getFirstChild());
+    assertNotMatch(pair.templateNode, pair.testNode.getFirstFirstChild());
+    assertMatch(pair.templateNode, pair.testNode.getLastChild().getFirstChild());
+  }
+
   private void assertMatch(Node templateRoot, Node testNode, boolean shouldMatch) {
     assertMatch(templateRoot, testNode, shouldMatch, TypeMatchingStrategy.LOOSE);
   }
@@ -543,8 +609,7 @@ public final class TemplateAstMatcherTest {
       boolean shouldMatch,
       TypeMatchingStrategy typeMatchingStrategy) {
     TemplateAstMatcher matcher =
-        new TemplateAstMatcher(
-            lastCompiler.getTypeRegistry(), templateRoot.getFirstChild(), typeMatchingStrategy);
+        new TemplateAstMatcher(lastCompiler, templateRoot.getFirstChild(), typeMatchingStrategy);
     StringBuilder sb = new StringBuilder();
     sb.append("The nodes should").append(shouldMatch ? "" : " not").append(" have matched.\n");
     sb.append("Template node:\n").append(templateRoot.toStringTree()).append("\n");
@@ -570,6 +635,8 @@ public final class TemplateAstMatcherTest {
     CompilerOptions options = new CompilerOptions();
     options.setLanguageIn(LanguageMode.ECMASCRIPT3);
     options.setCheckTypes(true);
+    options.setChecksOnly(true);
+    options.setPreserveDetailedSourceInfo(true);
 
     Node templateNode = compiler.parse(SourceFile.fromCode("template", template));
 

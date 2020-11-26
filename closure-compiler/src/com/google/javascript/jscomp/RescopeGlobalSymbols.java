@@ -28,27 +28,29 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Finds all references to global symbols and rewrites them to be property
- * accesses to a special object with the same name as the global symbol.
+ * Finds all references to global symbols and rewrites them to be property accesses to a special
+ * object with the same name as the global symbol.
  *
- * Given the name of the global object is NS
+ * <p>Given the name of the global object is NS
+ *
  * <pre> var a = 1; function b() { return a }</pre>
+ *
  * becomes
+ *
  * <pre> NS.a = 1; NS.b = function b() { return NS.a }</pre>
  *
- * This allows splitting code into modules that depend on each other's
- * global symbols, without using polluting JavaScript's global scope with those
- * symbols. You typically define just a single global symbol, wrap each module
- * in a function wrapper, and pass the global symbol around, eg,
+ * This allows splitting code into modules that depend on each other's global symbols, without using
+ * polluting JavaScript's global scope with those symbols. You typically define just a single global
+ * symbol, wrap each module in a function wrapper, and pass the global symbol around, eg,
+ *
  * <pre> var uniqueNs = uniqueNs || {}; </pre>
+ *
  * <pre> (function (NS) { ...your module code here... })(uniqueNs); </pre>
  *
- *
- * <p>This compile step requires moveFunctionDeclarations to be turned on
- * to guarantee semantics.
+ * <p>This compile step requires rewriteGlobalDeclarationsForTryCatchWrapping to be turned on to
+ * guarantee semantics.
  *
  * <p>For lots of examples, see the unit test.
- *
  */
 final class RescopeGlobalSymbols implements CompilerPass {
 
@@ -113,7 +115,9 @@ final class RescopeGlobalSymbols implements CompilerPass {
       return false;
     }
     Var v = t.getScope().getVar(varname);
-    return v == null || v.isExtern() || (v.scope.isGlobal() && this.externNames.contains(varname));
+    return v == null
+        || v.isExtern()
+        || (v.getScope().isGlobal() && this.externNames.contains(varname));
   }
 
   private void addExternForGlobalSymbolNamespace() {
@@ -285,9 +289,7 @@ final class RescopeGlobalSymbols implements CompilerPass {
         // a function referencing this is being assigned. Otherwise we
         // check whether the function assigned is a) an arrow function, which has a
         // lexically-scoped this, or b) a non-arrow function that does not reference this.
-        if (value == null
-            || !value.isFunction()
-            || (!value.isArrowFunction() && NodeUtil.referencesThis(value))) {
+        if (value == null || !value.isFunction() || NodeUtil.referencesOwnReceiver(value)) {
           maybeReferencesThis.add(name);
         }
       }
@@ -473,8 +475,7 @@ final class RescopeGlobalSymbols implements CompilerPass {
      */
     void declareModuleGlobals() {
       for (ModuleGlobal global : preDeclarations) {
-        if (global.root.getFirstChild() != null
-            && global.root.getFirstChild().isVar()) {
+        if (global.root.hasChildren() && global.root.getFirstChild().isVar()) {
           global.root.getFirstChild().addChildToBack(global.name);
         } else {
           global.root.addChildToFront(IR.var(global.name).srcref(global.name));

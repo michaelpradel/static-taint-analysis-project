@@ -45,7 +45,8 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
 
   public static final DiagnosticType DOES_NOT_HAVE_EXPORT_WITH_DETAILS =
       DiagnosticType.error(
-          "JSC_DOES_NOT_HAVE_EXPORT", "Requested module does not have an export \"{0}\".{1}");
+          "JSC_DOES_NOT_HAVE_EXPORT_WITH_DETAILS",
+          "Requested module does not have an export \"{0}\".{1}");
 
   private final class ModuleRequestResolverImpl implements ModuleRequestResolver {
     private UnresolvedModule getFallbackForMissingNonClosureModule(ModuleLoader.ModulePath path) {
@@ -142,12 +143,8 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
 
     @Nullable
     private UnresolvedModule resolveForClosure(String namespace) {
-      UnresolvedModule module = unresolvedModulesByClosureNamespace.get(namespace);
-      if (module == null) {
-        module = getFallbackForMissingClosureModule(namespace);
-        unresolvedModulesByClosureNamespace.put(namespace, module);
-      }
-      return module;
+      return unresolvedModulesByClosureNamespace.computeIfAbsent(
+          namespace, this::getFallbackForMissingClosureModule);
     }
 
     @Nullable
@@ -162,7 +159,7 @@ public class ModuleMapCreator implements HotSwapCompilerPass {
       ModuleLoader.ModulePath requestedPath =
           modulePath.resolveJsModule(
               moduleRequest,
-              modulePath.toString(),
+              forLineInfo.getSourceFileName(),
               forLineInfo.getLineno(),
               forLineInfo.getCharno());
 

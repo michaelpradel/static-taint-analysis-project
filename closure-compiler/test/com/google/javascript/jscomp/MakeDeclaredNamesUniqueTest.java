@@ -120,6 +120,17 @@ public final class MakeDeclaredNamesUniqueTest extends CompilerTestCase {
   }
 
   @Test
+  public void testMakeDeclaredNamesUniqueNullishCoalesce() {
+    setLanguage(LanguageMode.UNSUPPORTED, LanguageMode.UNSUPPORTED);
+    this.useDefaultRenamer = true;
+
+    test(
+        "var foo; var x = function foo(){var foo = false ?? {};}",
+        "var foo; var x = function foo$jscomp$1(){var foo$jscomp$2 = false ?? {}}");
+    testSameWithInversion("var a = b ?? c;");
+  }
+
+  @Test
   public void testShadowedBleedingName() {
     this.useDefaultRenamer = true;
 
@@ -307,6 +318,28 @@ public final class MakeDeclaredNamesUniqueTest extends CompilerTestCase {
     this.useDefaultRenamer = true;
     testSame("function f(){} function f(){}");
     testSame("var x = function() {function f(){} function f(){}};");
+  }
+
+  @Test
+  public void testMakeFunctionsUniqueWithContext1() {
+    this.useDefaultRenamer = true;
+    test(
+        "if (1) { function f(){} } else { function f(){} }",
+        "if (1) { function f(){} } else { function f$jscomp$1(){} }");
+  }
+
+  @Test
+  public void testMakeFunctionsUniqueWithContext2() {
+    this.useDefaultRenamer = true;
+    testSame("if (1) { function f(){} function f(){} }");
+  }
+
+  @Test
+  public void testMakeFunctionsUniqueWithContext3() {
+    this.useDefaultRenamer = true;
+    test(
+        "function f() {} if (1) { function f(){} function f(){} }",
+        "function f() {} if (1) { function f$jscomp$1(){} function f$jscomp$1(){} }");
   }
 
   @Test

@@ -16,6 +16,7 @@
 
 package com.google.javascript.jscomp;
 
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.rhino.Node;
 import org.junit.Before;
 import org.junit.Test;
@@ -39,11 +40,14 @@ public final class RemoveUnusedCodePrototypePropertiesTest extends CompilerTestC
           "externFunction.prototype.externPropName;",
           "var mExtern;",
           "mExtern.bExtern;",
-          "mExtern['cExtern'];");
+          "mExtern['cExtern'];",
+          "",
+          "/** @const */",
+          "var goog = {};",
+          "goog.reflect.objectProperty = function(name) { };");
 
   private boolean keepLocals = true;
   private boolean keepGlobals = false;
-  private boolean allowRemovalOfExternProperties = false;
 
   public RemoveUnusedCodePrototypePropertiesTest() {
     super(EXTERNS);
@@ -63,7 +67,6 @@ public final class RemoveUnusedCodePrototypePropertiesTest extends CompilerTestC
             .removeLocalVars(!keepLocals)
             .removeGlobals(!keepGlobals)
             .removeUnusedPrototypeProperties(true)
-            .allowRemovalOfExternProperties(allowRemovalOfExternProperties)
             .build()
             .process(externs, root);
       }
@@ -81,12 +84,13 @@ public final class RemoveUnusedCodePrototypePropertiesTest extends CompilerTestC
   @Before
   public void setUp() throws Exception {
     super.setUp();
+    // Allow testing of features that aren't fully supported for output yet.
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
     enableNormalize();
     enableGatherExternProperties();
     onlyValidateNoNewGettersAndSetters();
     keepLocals = true;
     keepGlobals = false;
-    allowRemovalOfExternProperties = false;
   }
 
   @Test
@@ -386,20 +390,6 @@ public final class RemoveUnusedCodePrototypePropertiesTest extends CompilerTestC
         "Foo.prototype._externMethod = Foo.prototype.method";
 
     test(classAndItsMethodAliasedAsExtern, compiled);
-  }
-
-  @Test
-  public void testMethodsFromExternsFileNotExported() {
-    allowRemovalOfExternProperties = true;
-
-    test(
-        lines(
-            "function Foo() {}",
-            "Foo.prototype.bar_ = function() {};",
-            "Foo.prototype.unused = function() {};",
-            "var instance = new Foo;",
-            "Foo.prototype.externPropName = Foo.prototype.bar_"),
-        "function Foo(){} new Foo;");
   }
 
   @Test
@@ -815,6 +805,39 @@ public final class RemoveUnusedCodePrototypePropertiesTest extends CompilerTestC
   }
 
   @Test
+  public void testOptionalGetPropPreventsRemoval() {
+    test(
+        lines(
+            "class C {",
+            "  constructor() {",
+            "    this.x = 1;",
+            "  }",
+            "  optGetPropRef() {}",
+            "  optCallRef() {}",
+            "  unreferenced() {}",
+            "}",
+            "var c = new C;",
+            "c?.optGetPropRef()",
+            "c.optCallRef?.()",
+            // no call to unreferenced()
+            ""),
+        lines(
+            "class C {",
+            "  constructor() {",
+            "    this.x = 1;",
+            "  }",
+            "  optGetPropRef() {}", // kept
+            "  optCallRef() {}", // kept
+            // unreferenced() removed
+            "}",
+            "var c = new C;",
+            "c?.optGetPropRef()",
+            "c.optCallRef?.()",
+            // no call to unreferenced()
+            ""));
+  }
+
+  @Test
   public void testEs6Class() {
     testSame(
         lines(
@@ -1058,5 +1081,53 @@ public final class RemoveUnusedCodePrototypePropertiesTest extends CompilerTestC
 
     testSame("import { square, diag } from '/lib';");
     testSame("import * as lib from '/lib';");
+  }
+
+  @Test
+  public void testReflection_reflectProperty_pinsReflectedName() {
+    testSame(
+        lines(
+            "/** @constructor */",
+            "function Foo() {}",
+            "Foo.prototype.handle = function(x, y) { alert(y); };",
+            "",
+            "goog.reflect.objectProperty('handle');",
+            "alert(new Foo());"));
+  }
+
+  @Test
+  public void testReflection_reflectProperty_onlyPinsReflectedName() {
+    test(
+        lines(
+            "/** @constructor */",
+            "function Foo() {}",
+            "Foo.prototype.handle = function(x, y) { alert(y); };",
+            "",
+            "goog.reflect.objectProperty('not_handle');",
+            "alert(new Foo());"),
+        lines(
+            "/** @constructor */",
+            "function Foo() {}",
+            "",
+            "goog.reflect.objectProperty('not_handle');",
+            "alert(new Foo());"));
+  }
+
+  @Test
+  public void testReflection_reflectProperty_onlyPinsReflectedName_whenNameMissing() {
+    test(
+        lines(
+            "/** @constructor */",
+            "function Foo() {}",
+            "Foo.prototype.handle = function(x, y) { alert(y); };",
+            "",
+            "goog.reflect.objectProperty();",
+            "alert(new Foo());"),
+        lines(
+            "/** @constructor */",
+            "function Foo() {}",
+            "",
+            "goog.reflect.objectProperty();",
+            "alert(new Foo());"));
   }
 }

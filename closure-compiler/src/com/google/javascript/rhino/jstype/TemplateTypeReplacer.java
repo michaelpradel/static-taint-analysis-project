@@ -50,6 +50,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Specializes {@link TemplatizedType}s according to provided bindings.
@@ -152,6 +153,11 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
 
   @Override
   public JSType caseFunctionType(FunctionType type) {
+    return guardAgainstCycles(type, this::caseFunctionTypeUnguarded);
+  }
+
+  @SuppressWarnings("ReferenceEquality")
+  private JSType caseFunctionTypeUnguarded(FunctionType type) {
     if (isNativeFunctionType(type)) {
       return type;
     }
@@ -175,15 +181,15 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
     }
 
     FunctionParamBuilder paramBuilder = new FunctionParamBuilder(registry);
-    for (Node paramNode : type.getParameters()) {
+    for (FunctionType.Parameter paramNode : type.getParameters()) {
       JSType beforeParamType = paramNode.getJSType();
       JSType afterParamType = beforeParamType.visit(this);
       if (beforeParamType != afterParamType) {
         changed = true;
       }
-      if (paramNode.isOptionalArg()) {
+      if (paramNode.isOptional()) {
         paramBuilder.addOptionalParams(afterParamType);
-      } else if (paramNode.isVarArgs()) {
+      } else if (paramNode.isVariadic()) {
         paramBuilder.addVarArgs(afterParamType);
       } else {
         paramBuilder.addRequiredParams(afterParamType);
@@ -194,7 +200,7 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
       FunctionType ft =
           FunctionType.builder(registry)
               .withKind(type.getKind())
-              .withParamsNode(paramBuilder.build())
+              .withParameters(paramBuilder.build())
               .withReturnType(afterReturn)
               .withTypeOfThis(afterThis)
               .withTemplateKeys(type.getTypeParameters())
@@ -213,17 +219,17 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
 
   @Override
   public JSType caseObjectType(ObjectType objType) {
+    return guardAgainstCycles(objType, this::caseObjectTypeUnguarded);
+  }
+
+  @SuppressWarnings("ReferenceEquality")
+  private JSType caseObjectTypeUnguarded(ObjectType objType) {
     if (!visitProperties
         || objType.isNominalType()
         || objType instanceof ProxyObjectType
         || !objType.isRecordType()) {
       return objType;
     }
-
-    if (seenTypes.contains(objType)) {
-      return objType;
-    }
-    seenTypes.add(objType);
 
     boolean changed = false;
     RecordTypeBuilder builder = new RecordTypeBuilder(registry);
@@ -237,8 +243,6 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
       builder.addProperty(prop, afterType, propertyNode);
     }
 
-    seenTypes.remove(objType);
-
     if (changed) {
       return builder.build();
     }
@@ -248,6 +252,11 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
 
   @Override
   public JSType caseTemplatizedType(TemplatizedType type) {
+    return guardAgainstCycles(type, this::caseTemplatizedTypeUnguarded);
+  }
+
+  @SuppressWarnings("ReferenceEquality")
+  private JSType caseTemplatizedTypeUnguarded(TemplatizedType type) {
     boolean changed = false;
     ObjectType beforeBaseType = type.getReferencedType();
     ObjectType afterBaseType = ObjectType.cast(beforeBaseType.visit(this));
@@ -286,6 +295,11 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
   }
 
   @Override
+  public JSType caseBigIntType() {
+    return getNativeType(JSTypeNative.BIGINT_TYPE);
+  }
+
+  @Override
   public JSType caseStringType() {
     return getNativeType(JSTypeNative.STRING_TYPE);
   }
@@ -302,6 +316,11 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
 
   @Override
   public JSType caseUnionType(UnionType type) {
+    return guardAgainstCycles(type, this::caseUnionTypeUnguarded);
+  }
+
+  @SuppressWarnings("ReferenceEquality")
+  private JSType caseUnionTypeUnguarded(UnionType type) {
     boolean changed = false;
     List<JSType> results = new ArrayList<>();
     for (JSType alternative : type.getAlternates()) {
@@ -369,6 +388,11 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
 
   @Override
   public JSType caseProxyObjectType(ProxyObjectType type) {
+    return guardAgainstCycles(type, this::caseProxyObjectTypeUnguarded);
+  }
+
+  @SuppressWarnings("ReferenceEquality")
+  private JSType caseProxyObjectTypeUnguarded(ProxyObjectType type) {
     // Be careful not to unwrap a type unless it has changed.
     JSType beforeType = type.getReferencedTypeInternal();
     JSType replacement = beforeType.visit(this);
@@ -408,5 +432,16 @@ public final class TemplateTypeReplacer implements Visitor<JSType> {
   private boolean isSameType(TemplateType currentType, TemplateType replacementType) {
     return currentType == replacementType
         || currentType == bindings.getUnresolvedOriginalTemplateType(replacementType);
+  }
+
+  private <T extends JSType> JSType guardAgainstCycles(T type, Function<T, JSType> mapper) {
+    if (!this.seenTypes.add(type)) {
+      return type;
+    }
+    try {
+      return mapper.apply(type);
+    } finally {
+      this.seenTypes.remove(type);
+    }
   }
 }

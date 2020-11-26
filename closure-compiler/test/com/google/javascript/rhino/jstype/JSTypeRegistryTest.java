@@ -68,8 +68,10 @@ import com.google.javascript.rhino.testing.AbstractStaticScope;
 import com.google.javascript.rhino.testing.MapBasedScope;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -82,75 +84,82 @@ import org.junit.runners.JUnit4;
 public class JSTypeRegistryTest {
   // TODO(user): extend this class with more tests, as JSTypeRegistry is
   // now much larger
+
+  private final JSTypeRegistry registry = new JSTypeRegistry(null, null);
+  private JSTypeResolver.Closer closer;
+
+  @Before
+  @SuppressWarnings({"MustBeClosedChecker"})
+  public void setUp() throws Exception {
+    this.closer = registry.getResolver().openForDefinition();
+  }
+
   @Test
   public void testGetBuiltInType_boolean() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    assertType(typeRegistry.getType(null, "boolean"))
-        .isStructurallyEqualTo(typeRegistry.getNativeType(JSTypeNative.BOOLEAN_TYPE));
+    assertType(registry.getType(null, "boolean"))
+        .isEqualTo(registry.getNativeType(JSTypeNative.BOOLEAN_TYPE));
+  }
+
+  @Test
+  public void testGetBuiltInType_bigint() {
+    assertType(registry.getType(null, "bigint"))
+        .isEqualTo(registry.getNativeType(JSTypeNative.BIGINT_TYPE));
   }
 
   @Test
   public void testGetBuiltInType_iterable() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    assertType(typeRegistry.getGlobalType("Iterable"))
-        .isStructurallyEqualTo(typeRegistry.getNativeType(ITERABLE_TYPE));
+    assertType(registry.getGlobalType("Iterable"))
+        .isEqualTo(registry.getNativeType(ITERABLE_TYPE));
   }
 
   @Test
   public void testGetBuiltInType_iterator() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    assertType(typeRegistry.getGlobalType("Iterator"))
-        .isStructurallyEqualTo(typeRegistry.getNativeType(ITERATOR_TYPE));
+    assertType(registry.getGlobalType("Iterator"))
+        .isEqualTo(registry.getNativeType(ITERATOR_TYPE));
   }
 
   @Test
   public void testGetBuiltInType_generator() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    assertType(typeRegistry.getGlobalType("Generator"))
-        .isStructurallyEqualTo(typeRegistry.getNativeType(GENERATOR_TYPE));
+    assertType(registry.getGlobalType("Generator"))
+        .isEqualTo(registry.getNativeType(GENERATOR_TYPE));
   }
 
   @Test
   public void testGetBuiltInType_async_iterable() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    assertType(typeRegistry.getGlobalType("AsyncIterable"))
-        .isStructurallyEqualTo(typeRegistry.getNativeType(ASYNC_ITERABLE_TYPE));
+    assertType(registry.getGlobalType("AsyncIterable"))
+        .isEqualTo(registry.getNativeType(ASYNC_ITERABLE_TYPE));
   }
 
   @Test
   public void testGetBuiltInType_async_iterator() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    assertType(typeRegistry.getGlobalType("AsyncIterator"))
-        .isStructurallyEqualTo(typeRegistry.getNativeType(ASYNC_ITERATOR_TYPE));
+    assertType(registry.getGlobalType("AsyncIterator"))
+        .isEqualTo(registry.getNativeType(ASYNC_ITERATOR_TYPE));
   }
 
   @Test
   public void testGetBuiltInType_async_generator() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    assertType(typeRegistry.getGlobalType("AsyncGenerator"))
-        .isStructurallyEqualTo(typeRegistry.getNativeType(ASYNC_GENERATOR_TYPE));
+    assertType(registry.getGlobalType("AsyncGenerator"))
+        .isEqualTo(registry.getNativeType(ASYNC_GENERATOR_TYPE));
   }
 
   @Test
   public void testGetBuildInType_iTemplateArray() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    assertType(typeRegistry.getGlobalType("ITemplateArray"))
-        .isStructurallyEqualTo(typeRegistry.getNativeType(I_TEMPLATE_ARRAY_TYPE));
+    assertType(registry.getGlobalType("ITemplateArray"))
+        .isEqualTo(registry.getNativeType(I_TEMPLATE_ARRAY_TYPE));
   }
 
   @Test
   public void testGetBuiltInType_Promise() {
-    JSTypeRegistry registry = new JSTypeRegistry(null);
     ObjectType promiseType = registry.getNativeObjectType(JSTypeNative.PROMISE_TYPE);
-    assertType(registry.getGlobalType("Promise")).isStructurallyEqualTo(promiseType);
+    assertType(registry.getGlobalType("Promise")).isEqualTo(promiseType);
 
     // Test that it takes one parameter of type
     // function(function((IThenable<TYPE>|TYPE|null|{then: ?})=): ?, function(*=): ?): ?
     FunctionType promiseCtor = promiseType.getConstructor();
-    Node paramList = promiseCtor.getParametersNode();
-    Node firstParameter = paramList.getFirstChild();
-    assertThat(firstParameter).isNotNull();
-    FunctionType paramType = paramList.getFirstChild().getJSType().toMaybeFunctionType();
+    List<FunctionType.Parameter> paramList = promiseCtor.getParameters();
+    assertThat(paramList).hasSize(1);
+    FunctionType.Parameter firstParameter = paramList.get(0);
+    FunctionType paramType = firstParameter.getJSType().toMaybeFunctionType();
     assertThat(paramType.toString())
         .isEqualTo(
             "function(function((IThenable<TYPE>|TYPE|null|{then: ?})=): ?, function(*=): ?): ?");
@@ -158,43 +167,41 @@ public class JSTypeRegistryTest {
 
   @Test
   public void testGetDeclaredType() {
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
-    JSType type = typeRegistry.createAnonymousObjectType(null);
+    JSType type = registry.createAnonymousObjectType(null);
     String name = "Foo";
-    typeRegistry.declareType(null, name, type);
-    assertType(typeRegistry.getType(null, name)).isStructurallyEqualTo(type);
+    registry.declareType(null, name, type);
+    assertType(registry.getType(null, name)).isEqualTo(type);
 
     // Ensure different instances are independent.
     JSTypeRegistry typeRegistry2 = new JSTypeRegistry(null);
     assertThat(typeRegistry2.getType(null, name)).isEqualTo(null);
-    assertType(typeRegistry.getType(null, name)).isStructurallyEqualTo(type);
+    assertType(registry.getType(null, name)).isEqualTo(type);
   }
 
   @Test
   public void testPropertyOnManyTypes() {
+    this.closer.close(); // Force resolution to happen on the union.
     // Given
-    JSTypeRegistry typeRegistry = new JSTypeRegistry(null);
 
     // By default the UnionType.Builder will treat a union of more than 30
     // types as an unknown type. We don't want that for property checking
     // so test that the limit is higher.
     for (int i = 0; i < 100; i++) {
-      JSType type = typeRegistry.createObjectType("type: " + i, null);
+      JSType type = registry.createObjectType("type: " + i, null);
 
       // When
-      typeRegistry.registerPropertyOnType("foo", type);
+      registry.registerPropertyOnType("foo", type);
 
       // Then
       assertWithMessage("Registered property `foo` on <%s> types.", i + 1)
           .about(types())
-          .that(typeRegistry.getGreatestSubtypeWithProperty(type, "foo"))
+          .that(registry.getGreatestSubtypeWithProperty(type, "foo"))
           .isNotUnknown();
     }
   }
 
   @Test
   public void testReadableTypeName() {
-    JSTypeRegistry registry = new JSTypeRegistry(null);
 
     assertThat(getReadableTypeNameHelper(registry, ALL_TYPE)).isEqualTo("*");
 
@@ -220,7 +227,6 @@ public class JSTypeRegistryTest {
   @Test
   public void testCreateTypeFromCommentNode_createsNamedTypeIfNameIsUndefined() {
     // Create an empty global scope.
-    JSTypeRegistry registry = new JSTypeRegistry(null);
     StaticTypedScope globalScope = new MapBasedScope(ImmutableMap.of());
 
     JSType type =
@@ -234,7 +240,6 @@ public class JSTypeRegistryTest {
   @Test
   public void testCreateTypeFromCommentNode_multipleLookupsInSameScope() {
     // Create an empty global scope.
-    JSTypeRegistry registry = new JSTypeRegistry(null);
     StaticTypedScope globalScope = new MapBasedScope(ImmutableMap.of());
 
     JSType typeOne =
@@ -253,7 +258,6 @@ public class JSTypeRegistryTest {
   @Test
   public void testCreateTypeFromCommentNode_usesGlobalTypeIfExists() {
     // Create a global scope and a global type 'Foo'.
-    JSTypeRegistry registry = new JSTypeRegistry(null);
     StaticTypedScope globalScope =
         createStaticTypedScope(IR.root(), null, ImmutableMap.of(), new HashSet<>());
     registry.declareType(globalScope, "Foo", registry.getNativeType(JSTypeNative.UNKNOWN_TYPE));
@@ -272,7 +276,6 @@ public class JSTypeRegistryTest {
   @Test
   public void testCreateTypeFromCommentNode_createsNamedTypeIfLocalShadowsGlobalType() {
     // Create a global scope and a global type 'Foo'.
-    JSTypeRegistry registry = new JSTypeRegistry(null);
     JSType unknownType = registry.getNativeType(JSTypeNative.UNKNOWN_TYPE);
     StaticTypedScope globalScope =
         createStaticTypedScope(IR.root(), null, ImmutableMap.of(), ImmutableSet.of());
@@ -301,8 +304,6 @@ public class JSTypeRegistryTest {
 
   @Test
   public void testNativeTypesAreUnique() {
-    JSTypeRegistry registry = new JSTypeRegistry(null);
-
     for (JSTypeNative n1 : JSTypeNative.values()) {
       for (JSTypeNative n2 : JSTypeNative.values()) {
         JSType t1 = registry.getNativeType(n1);
@@ -319,7 +320,6 @@ public class JSTypeRegistryTest {
   @Test
   public void testCreateTypeFromCommentNode_usesTopMostScopeOfName() {
     // Create a global scope and a global type 'Foo'.
-    JSTypeRegistry registry = new JSTypeRegistry(null);
     StaticTypedScope globalScope =
         createStaticTypedScope(IR.root(), null, ImmutableMap.of(), new HashSet<>());
     registry.declareType(globalScope, "Foo", registry.getNativeType(JSTypeNative.UNKNOWN_TYPE));

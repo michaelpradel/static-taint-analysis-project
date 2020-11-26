@@ -17,6 +17,7 @@
 package com.google.javascript.jscomp.deps;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Comparator.naturalOrder;
 
 import com.google.common.annotations.GwtIncompatible;
 import com.google.common.annotations.VisibleForTesting;
@@ -55,7 +56,7 @@ public final class ModuleLoader {
   /** The default module root, the current directory. */
   public static final String DEFAULT_FILENAME_PREFIX = "." + MODULE_SLASH;
 
-  public static final String JSC_BROWSER_BLACKLISTED_MARKER = "$jscomp$browser$blacklisted";
+  public static final String JSC_BROWSER_SKIPLISTED_MARKER = "$jscomp$browser$skiplisted";
 
   public static final DiagnosticType LOAD_WARNING =
       DiagnosticType.error("JSC_JS_MODULE_LOAD_WARNING", "Failed to load module \"{0}\"");
@@ -69,8 +70,6 @@ public final class ModuleLoader {
   /** Root URIs to match module roots against. */
   private final ImmutableList<String> moduleRootPaths;
   /** The set of all known input module URIs (including trailing .js), after normalization. */
-  private final ImmutableSet<String> modulePaths;
-
   /** Used to canonicalize paths before resolution. */
   private final PathResolver pathResolver;
 
@@ -103,13 +102,13 @@ public final class ModuleLoader {
     this.pathEscaper = pathEscaper;
     this.errorHandler = errorHandler == null ? new NoopErrorHandler() : errorHandler;
     this.moduleRootPaths = createRootPaths(moduleRoots, pathResolver, pathEscaper);
-    this.modulePaths =
+    ImmutableSet<String> modulePaths =
         resolvePaths(
             Iterables.transform(Iterables.transform(inputs, DependencyInfo::getName), pathResolver),
             moduleRootPaths,
             pathEscaper);
     this.moduleResolver =
-        factory.create(this.modulePaths, this.moduleRootPaths, this.errorHandler, this.pathEscaper);
+        factory.create(modulePaths, this.moduleRootPaths, this.errorHandler, this.pathEscaper);
   }
 
   public ModuleLoader(
@@ -242,9 +241,7 @@ public final class ModuleLoader {
     // Sort longest length to shortest so that paths are applied most specific to least.
     Set<String> builder =
         new TreeSet<>(
-            Comparator.comparingInt(String::length)
-                .thenComparing(Comparator.naturalOrder())
-                .reversed());
+            Comparator.comparingInt(String::length).thenComparing(naturalOrder()).reversed());
     for (String root : roots) {
       String rootModuleName = escaper.escape(resolver.apply(root));
       if (isAmbiguousIdentifier(rootModuleName)) {
@@ -373,7 +370,7 @@ public final class ModuleLoader {
   /** A trivial module loader with no roots. */
   public static final ModuleLoader EMPTY =
       new ModuleLoader(
-          /** errorReporter= */ null,
+          /* errorHandler= */ null,
           ImmutableList.of(),
           ImmutableList.of(),
           BrowserModuleResolver.FACTORY);

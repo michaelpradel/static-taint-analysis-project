@@ -249,7 +249,7 @@ class CheckAccessControls implements Callback, HotSwapCompilerPass {
       case ASSIGN:
         {
           Node lValue = parent.getFirstChild();
-          if (NodeUtil.isGet(lValue)) {
+          if (NodeUtil.isNormalGet(lValue)) {
             // We have an assignment of the form `a.b = ...`.
             JSType lValueType = lValue.getJSType();
             if (lValueType != null && (lValueType.isConstructor() || lValueType.isInterface())) {
@@ -661,17 +661,18 @@ class CheckAccessControls implements Callback, HotSwapCompilerPass {
       return;
     }
 
-    JSType type = ctor.getJSType().toMaybeFunctionType();
-    if (type != null && type.isConstructor()) {
-      JSType finalParentClass = getSuperClassInstanceIfFinal(bestInstanceTypeForMethodOrCtor(ctor));
-      if (finalParentClass != null) {
-        compiler.report(
-            JSError.make(
-                ctor,
-                EXTEND_FINAL_CLASS,
-                type.getDisplayName(),
-                finalParentClass.getDisplayName()));
-      }
+    FunctionType ctorType = ctor.getJSType().toMaybeFunctionType();
+    if (ctorType == null || !ctorType.isConstructor()) {
+      return;
+    }
+    ObjectType finalParentClass = getSuperClassInstanceIfFinal(ctorType);
+    if (finalParentClass != null) {
+      compiler.report(
+          JSError.make(
+              ctor,
+              EXTEND_FINAL_CLASS,
+              ctorType.getDisplayName(),
+              finalParentClass.getDisplayName()));
     }
   }
 
@@ -709,16 +710,9 @@ class CheckAccessControls implements Callback, HotSwapCompilerPass {
         return;
       }
 
-      ObjectType oType = objectType;
-      while (oType != null) {
-        if (initializedConstantProperties.containsEntry(oType, propertyName)
-            || initializedConstantProperties.containsEntry(
-                getCanonicalInstance(oType), propertyName)) {
-          compiler.report(
-              JSError.make(propRef.getSourceNode(), CONST_PROPERTY_REASSIGNED_VALUE, propertyName));
-          break;
-        }
-        oType = oType.getImplicitPrototype();
+      if (isIllegalMutationOfConstantProperty(propRef, objectType)) {
+        compiler.report(
+            JSError.make(propRef.getSourceNode(), CONST_PROPERTY_REASSIGNED_VALUE, propertyName));
       }
 
       initializedConstantProperties.put(objectType, propertyName);
@@ -731,6 +725,21 @@ class CheckAccessControls implements Callback, HotSwapCompilerPass {
         }
       }
     }
+  }
+
+  private boolean isIllegalMutationOfConstantProperty(PropertyReference ref, ObjectType type) {
+    if (type.isStructuralType() && !ref.isDeclaration()) {
+      return true;
+    }
+    String name = ref.getName();
+    while (type != null) {
+      if (initializedConstantProperties.containsEntry(type, name)
+          || initializedConstantProperties.containsEntry(getCanonicalInstance(type), name)) {
+        return true;
+      }
+      type = type.getImplicitPrototype();
+    }
+    return false;
   }
 
   /**
@@ -1190,17 +1199,10 @@ class CheckAccessControls implements Callback, HotSwapCompilerPass {
     return null;
   }
 
-  /**
-   * If the superclass is final, this method returns an instance of the superclass.
-   */
+  /** If the superclass is final, this method returns an instance of the superclass. */
   @Nullable
-  private static ObjectType getSuperClassInstanceIfFinal(@Nullable JSType type) {
-    if (type == null) {
-      return null;
-    }
-
-    ObjectType obj = type.toObjectType();
-    FunctionType ctor = (obj == null) ? null : obj.getSuperClassConstructor();
+  private static ObjectType getSuperClassInstanceIfFinal(FunctionType subCtor) {
+    FunctionType ctor = subCtor.getSuperClassConstructor();
     JSDocInfo doc = (ctor == null) ? null : ctor.getJSDocInfo();
     if (doc != null && doc.isFinal()) {
       return ctor.getInstanceType();
@@ -1394,7 +1396,8 @@ class CheckAccessControls implements Callback, HotSwapCompilerPass {
               .setReceiverType(boxedOrUnknown(sourceNode.getFirstChild().getJSType()))
               // Props are always mutated as L-values, even when assigned `undefined`.
               .setMutation(isLValue || sourceNode.getParent().isDelProp())
-              .setDeclaration(parent.isExprResult())
+              .setDeclaration(
+                  parent.isExprResult() || (jsdoc != null && jsdoc.isConstant() && isLValue))
               // TODO(b/113704668): This definition is way too loose. It was used to prevent
               // breakages during refactoring and should be tightened.
               .setOverride((jsdoc != null) && isLValue)
@@ -1413,7 +1416,20 @@ class CheckAccessControls implements Callback, HotSwapCompilerPass {
               // TODO(b/80580110): Eventually object-literal members should be covered by
               // `PropertyReference`s. However, doing so initially would have caused too many errors
               // in existing code and delayed support for class syntax.
-              return null;
+              if (!parent.getJSType().isLiteralObject()) {
+                // Only add a mutation if the object type is actually a literal object (e.g. a
+                // global namespace).  OBJECTLIT tokens are often used to fulfill structural types,
+                // which is fine for writing constant properties the first time.
+                return null;
+              }
+              builder
+                  .setName(sourceNode.getString())
+                  .setReceiverType(typeOrUnknown(ObjectType.cast(parent.getJSType())))
+                  .setMutation(true)
+                  .setDeclaration(true)
+                  .setOverride(false)
+                  .setReadableTypeName(() -> typeRegistry.getReadableTypeName(parent));
+              break;
 
             case OBJECT_PATTERN:
               builder
@@ -1455,7 +1471,6 @@ class CheckAccessControls implements Callback, HotSwapCompilerPass {
       default:
         return null;
     }
-
     return builder.setSourceNode(sourceNode).build();
   }
 

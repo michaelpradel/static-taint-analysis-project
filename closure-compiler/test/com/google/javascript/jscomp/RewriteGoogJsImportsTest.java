@@ -21,6 +21,7 @@ import static com.google.javascript.jscomp.RewriteGoogJsImports.GOOG_JS_REEXPORT
 import static com.google.javascript.jscomp.deps.ModuleLoader.LOAD_WARNING;
 
 import com.google.common.collect.ImmutableList;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.RewriteGoogJsImports.Mode;
 import com.google.javascript.jscomp.deps.ModuleLoader.ResolutionMode;
 import com.google.javascript.jscomp.modules.ModuleMapCreator;
@@ -34,7 +35,6 @@ import org.junit.runners.JUnit4;
  * Tests for {@link RewriteGoogJsImports} that involve rewriting. {@link CheckGoogJsImportTest} has
  * the link tests.
  */
-
 @RunWith(JUnit4.class)
 public final class RewriteGoogJsImportsTest extends CompilerTestCase {
   // JsFileRegexParser determines if this file is base.js by looking at the first comment of the
@@ -208,5 +208,23 @@ public final class RewriteGoogJsImportsTest extends CompilerTestCase {
             GOOG,
             SourceFile.fromCode("testcode", "export {require} from './closure/goog.js';")),
         GOOG_JS_REEXPORTED);
+  }
+
+  /** this is just to make sure the presence of import.meta does not cause a compiler failure */
+  @Test
+  public void testImportMeta() {
+    setLanguage(LanguageMode.UNSUPPORTED, LanguageMode.UNSUPPORTED);
+    test(
+        srcs(
+            BASE,
+            GOOG,
+            SourceFile.fromCode(
+                "testcode",
+                lines("import * as goog from './closure/goog.js';", "use(import.meta);"))),
+        expected(
+            BASE,
+            GOOG,
+            SourceFile.fromCode(
+                "testcode", lines("import './closure/goog.js';", "use(import.meta);"))));
   }
 }

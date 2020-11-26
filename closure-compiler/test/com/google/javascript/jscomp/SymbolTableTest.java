@@ -49,9 +49,7 @@ import org.junit.runners.JUnit4;
 /**
  * An integration test for symbol table creation
  *
- * @author nicksantos@google.com (Nick Santos)
  */
-
 @RunWith(JUnit4.class)
 public final class SymbolTableTest {
 
@@ -365,15 +363,14 @@ public final class SymbolTableTest {
     Symbol goog = getGlobalVar(table, "goog");
     assertThat(goog).isNotNull();
 
-    // 8 references:
+    // 6 references:
     // 5 in code
-    // 2 in strings
     // 1 created by ProcessClosurePrimitives when it processes the provide.
     //
     // NOTE(nicksantos): In the future, we may de-dupe references such
     // that the one in the goog.provide string and the one created by
     // ProcessClosurePrimitives count as the same reference.
-    assertThat(table.getReferences(goog)).hasSize(8);
+    assertThat(table.getReferences(goog)).hasSize(6);
   }
 
   @Test
@@ -568,7 +565,7 @@ public final class SymbolTableTest {
     List<Reference> refs = table.getReferenceList(prototype);
 
     // One of the refs is implicit in the declaration of the function.
-    assertWithMessage(refs.toString()).that(refs.size()).isEqualTo(2);
+    assertWithMessage(refs.toString()).that(refs).hasSize(2);
   }
 
   @Test
@@ -638,7 +635,7 @@ public final class SymbolTableTest {
     List<Reference> refs = table.getReferenceList(prototype);
 
     // The class declaration creates an implicit .prototype reference.
-    assertWithMessage(refs.toString()).that(refs.size()).isEqualTo(1);
+    assertWithMessage(refs.toString()).that(refs).hasSize(1);
     assertNode(refs.get(0).getNode().getParent()).hasToken(Token.CLASS);
   }
 

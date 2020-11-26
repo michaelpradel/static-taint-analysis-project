@@ -52,6 +52,8 @@ import com.google.javascript.rhino.Node;
 public final class TemplateType extends ProxyObjectType {
   private static final long serialVersionUID = 1L;
 
+  private static final JSTypeClass TYPE_CLASS = JSTypeClass.TEMPLATE;
+
   private final String name;
   private JSType bound;
   private final Node typeTransformation;
@@ -75,6 +77,13 @@ public final class TemplateType extends ProxyObjectType {
     this.name = name;
     this.bound = bound == null ? registry.getNativeObjectType(JSTypeNative.UNKNOWN_TYPE) : bound;
     this.typeTransformation = typeTransformation;
+
+    registry.getResolver().resolveIfClosed(this, TYPE_CLASS);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return TYPE_CLASS;
   }
 
   @Override
@@ -83,12 +92,12 @@ public final class TemplateType extends ProxyObjectType {
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    if (bound == registry.getNativeObjectType(JSTypeNative.UNKNOWN_TYPE)) {
+  void appendTo(TypeStringBuilder sb) {
+    if (JSType.areIdentical(bound, registry.getNativeObjectType(JSTypeNative.UNKNOWN_TYPE))) {
       // This is an unbound template, don't print it's bound
-      return sb.append(this.name);
+      sb.append(this.name);
     } else {
-      return sb.append(this.name).append(" extends ").append(bound);
+      sb.append(this.name).append(" extends ").append(bound);
     }
   }
 
@@ -126,29 +135,6 @@ public final class TemplateType extends ProxyObjectType {
   public void setBound(JSType bound) {
     this.bound = bound;
     this.setReferencedType(bound);
-  }
-
-  @Override
-  public boolean isSubtype(JSType that) {
-    return isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(
-      JSType that, ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    if (!this.getBound().isUnknownType()
-        && that.isTemplateType()
-        && !that.toMaybeTemplateType().getBound().isUnknownType()) {
-      return this.visit(new ContainsUpperBoundSuperTypeVisitor(that))
-          == ContainsUpperBoundSuperTypeVisitor.Result.PRESENT;
-    } else {
-      return super.isSubtype(that, implicitImplCache, subtypingMode);
-    }
-  }
-
-  @Override
-  public boolean equals(Object jsType) {
-    return (jsType instanceof TemplateType) && JSType.areIdentical(this, (JSType) jsType);
   }
 
   @Override

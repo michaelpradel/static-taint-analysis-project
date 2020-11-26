@@ -15,13 +15,10 @@
  */
 package com.google.javascript.refactoring.examples;
 
-import static com.google.javascript.refactoring.testing.RefasterJsTestUtils.assertFileRefactoring;
-
-import com.google.common.collect.ImmutableList;
+import com.google.javascript.refactoring.testing.RefasterJsTestCase;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
 
 @RunWith(JUnit4.class)
 public class ArrayIndexOfToIncludesTest {
@@ -33,16 +30,15 @@ public class ArrayIndexOfToIncludesTest {
 
   /** The RefasterJs template to use. */
   private static final String ARRAY_INDEXOF_TO_INCLUDES_TEMPLATE =
-      "src/" +
       "com/google/javascript/refactoring/examples/refasterjs/array_indexof_to_includes.js";
 
   @Test
   public void test_refactorings() throws Exception {
-    assertFileRefactoring(
-        ARRAY_INDEXOF_TO_INCLUDES_TEMPLATE,
-        TESTDATA_DIR,
-        "array_indexof_to_includes_in.js",
-        ImmutableList.of("goog_base.js"),
-        "array_indexof_to_includes_out.js");
+    RefasterJsTestCase.builder()
+        .setTemplatePath(ARRAY_INDEXOF_TO_INCLUDES_TEMPLATE)
+        .setInputPath(TESTDATA_DIR + "/array_indexof_to_includes_in.js")
+        .addExpectedOutputPath(TESTDATA_DIR + "/array_indexof_to_includes_out.js")
+        .addAdditionalSourcePath(TESTDATA_DIR + "/goog_base.js")
+        .test();
   }
 }

@@ -67,12 +67,6 @@ public final class CodingConventions {
     return n.getFirstChild().matchesQualifiedName(alwaysThrowsFunctionName);
   }
 
-  static boolean isAliasingGlobalThis(CodingConvention convention, Node n) {
-    return n.isAssign()
-        && n.getFirstChild().matchesQualifiedName(convention.getGlobalObject())
-        && n.getLastChild().isThis();
-  }
-
   /**
    * A convention that wraps another.
    *
@@ -128,7 +122,7 @@ public final class CodingConventions {
 
     @Override
     public final boolean isExported(String name) {
-      return isExported(name, false) || isExported(name, true);
+      return CodingConvention.super.isExported(name);
     }
 
     @Override
@@ -266,11 +260,6 @@ public final class CodingConventions {
     }
 
     @Override
-    public boolean isAliasingGlobalThis(Node n) {
-      return nextConvention.isAliasingGlobalThis(n);
-    }
-
-    @Override
     public Collection<AssertionFunctionSpec> getAssertionFunctions() {
       return nextConvention.getAssertionFunctions();
     }
@@ -345,15 +334,13 @@ public final class CodingConventions {
 
     @Override
     public boolean isOptionalParameter(Node parameter) {
-      // be as lax as possible, but this must be mutually exclusive from
-      // var_args parameters.
-      return parameter.isOptionalArg();
+      return false;
     }
 
     @Override
     public boolean isVarArgsParameter(Node parameter) {
       // be as lax as possible
-      return parameter.isRest() || parameter.isVarArgs();
+      return parameter.isRest();
     }
 
     @Override
@@ -379,8 +366,8 @@ public final class CodingConventions {
     }
 
     @Override
-    public boolean isExported(String name) {
-      return isExported(name, false) || isExported(name, true);
+    public final boolean isExported(String name) {
+      return CodingConvention.super.isExported(name);
     }
 
     @Override
@@ -522,11 +509,6 @@ public final class CodingConventions {
     @Override
     public String getGlobalObject() {
       return "window";
-    }
-
-    @Override
-    public boolean isAliasingGlobalThis(Node n) {
-      return CodingConventions.isAliasingGlobalThis(this, n);
     }
 
     @Override

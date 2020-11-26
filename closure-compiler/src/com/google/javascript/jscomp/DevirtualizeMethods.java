@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Predicates.alwaysTrue;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 
 import com.google.common.collect.ImmutableList;
@@ -28,10 +29,6 @@ import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
-import com.google.javascript.rhino.jstype.FunctionType;
-import com.google.javascript.rhino.jstype.JSType;
-import com.google.javascript.rhino.jstype.JSTypeNative;
-import com.google.javascript.rhino.jstype.ObjectType;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -45,9 +42,10 @@ import javax.annotation.Nullable;
  * <p>This transformation simplifies the call graph so smart name removal, cross module code motion
  * and other passes can do more.
  *
- * <p>To work effectively, this pass depends on {@link DisambiguateProperties} running first to do a
- * lot of heavy-lifting. It assumes that different methods will have unique names which in general
- * isn't true for source JavaScript.
+ * <p>To work effectively, this pass depends on {@link
+ * com.google.javascript.jscomp.disambiguate.DisambiguateProperties} running first to do a lot of
+ * heavy-lifting. It assumes that different methods will have unique names which in general isn't
+ * true for source JavaScript.
  *
  * <p>This pass should only be used in production code if property and variable renaming are turned
  * on. Resulting code may also benefit from `--collapse_anonymous_functions` and
@@ -226,7 +224,7 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
     JSDocInfo jsdoc = var.getJSDocInfo();
     if (jsdoc == null) {
       return false;
-    } else if (jsdoc.isConstructorOrInterface() || jsdoc.usesImplicitMatch()) {
+    } else if (jsdoc.isConstructorOrInterface()) {
       return true; // Case: `@constructor`, `@interface`, `@record`.
     }
 
@@ -304,7 +302,7 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
       }
     }
 
-    if (NodeUtil.containsType(definitionFunction, Token.SUPER)) {
+    if (NodeUtil.has(definitionFunction, Node::isSuper, alwaysTrue())) {
       // TODO(b/120452418): Remove this when we have a rewrite for `super`. We punted initially due
       // to complexity.
       return false;
@@ -337,7 +335,9 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
       // Accessing the property in any way besides CALL has issues:
       //   - tear-off: invocations can't be tracked
       //   - as constructor: unsupported rewrite
-      //   - as tagged template string: unspported rewrite
+      //   - as tagged template string: unsupported rewrite
+      //   - as optional chaining call: original invocation target may be null/undefined and
+      // rewriting creates an unconditional call to a well-defined global function
       return false;
     }
 
@@ -407,7 +407,7 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
 
     getprop.removeChild(receiver);
     call.replaceChild(getprop, receiver);
-    call.addChildToFront(IR.name(newMethodName).srcref(getprop));
+    call.addChildToFront(IR.name(newMethodName).copyTypeFrom(getprop).srcref(getprop));
 
     if (receiver.isSuper()) {
       // Case: `super.foo(a, b)` => `foo(this, a, b)`
@@ -454,7 +454,11 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
     Node newVarNode = IR.var(newNameNode).useSourceInfoIfMissingFrom(nameSource);
     statement.getParent().addChildBefore(newVarNode, statement);
 
-    // Attatch the function to the new variable.
+    // Copy the JSDocInfo, if any, from the original declaration
+    JSDocInfo originalJSDoc = NodeUtil.getBestJSDocInfo(definitionSite);
+    newVarNode.setJSDocInfo(originalJSDoc);
+
+    // Attach the function to the new variable.
     function.detach();
     newNameNode.addChildToFront(function);
 
@@ -468,38 +472,9 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
     replaceReferencesToThis(function.getSecondChild(), selfName); // In default param values.
     replaceReferencesToThis(function.getLastChild(), selfName); // In function body.
 
-    fixFunctionType(function);
-
     // Clean up dangling AST.
     NodeUtil.deleteNode(subtreeToRemove, compiler);
     compiler.reportChangeToEnclosingScope(newVarNode);
-  }
-
-  /**
-   * Creates a new type based on the original function type by
-   * adding the original this pointer type to the beginning of the
-   * argument type list and replacing the this pointer type with bottom.
-   */
-  private void fixFunctionType(Node functionNode) {
-    JSType t = functionNode.getJSType();
-    if (t == null) {
-      return;
-    }
-    FunctionType ft = t.toMaybeFunctionType();
-    if (ft != null) {
-      functionNode.setJSType(convertMethodToFunction(ft));
-    }
-  }
-
-  private JSType convertMethodToFunction(FunctionType method) {
-    List<JSType> paramTypes = new ArrayList<>();
-    paramTypes.add(method.getTypeOfThis());
-    for (Node param : method.getParameters()) {
-      paramTypes.add(param.getJSType());
-    }
-    ObjectType unknown = compiler.getTypeRegistry().getNativeObjectType(JSTypeNative.UNKNOWN_TYPE);
-    return compiler.getTypeRegistry().createFunctionTypeWithInstanceType(
-        unknown, method.getReturnType(), paramTypes);
   }
 
   /** Replaces references to "this" with references to name. Do not traverse function boundaries. */
@@ -511,7 +486,7 @@ class DevirtualizeMethods implements OptimizeCalls.CallGraphCompilerPass {
 
     for (Node child : node.children()) {
       if (child.isThis()) {
-        Node newName = IR.name(name).useSourceInfoFrom(child).setJSType(child.getJSType());
+        Node newName = IR.name(name).useSourceInfoFrom(child).copyTypeFrom(child);
         node.replaceChild(child, newName);
         compiler.reportChangeToEnclosingScope(newName);
       } else {

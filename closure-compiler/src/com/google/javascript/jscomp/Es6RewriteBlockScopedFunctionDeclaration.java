@@ -40,7 +40,6 @@ public final class Es6RewriteBlockScopedFunctionDeclaration extends AbstractPost
 
   @Override
   public void process(Node externs, Node root) {
-    TranspilationPasses.processTranspile(compiler, externs, transpiledFeatures, this);
     TranspilationPasses.processTranspile(compiler, root, transpiledFeatures, this);
     TranspilationPasses.maybeMarkFeaturesAsTranspiledAway(compiler, transpiledFeatures);
   }
@@ -94,7 +93,7 @@ public final class Es6RewriteBlockScopedFunctionDeclaration extends AbstractPost
     Node oldNameNode = n.getFirstChild();
     Node fnNameNode = oldNameNode.cloneNode();
     Node let = IR.declaration(fnNameNode, Token.LET).srcref(n);
-    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS);
+    NodeUtil.addFeatureToScript(t.getCurrentScript(), Feature.LET_DECLARATIONS, compiler);
 
     // Prepare the function.
     oldNameNode.setString("");

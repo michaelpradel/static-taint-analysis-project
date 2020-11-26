@@ -15,13 +15,10 @@
  */
 package com.google.javascript.refactoring.examples;
 
-import static com.google.javascript.refactoring.testing.RefasterJsTestUtils.assertFileRefactoring;
-
-import com.google.common.collect.ImmutableList;
+import com.google.javascript.refactoring.testing.RefasterJsTestCase;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
 
 @RunWith(JUnit4.class)
 public class ArrayPrototypeSliceToArrayFromTest {
@@ -33,16 +30,15 @@ public class ArrayPrototypeSliceToArrayFromTest {
 
   /** The RefasterJs template to use. */
   private static final String ARRAY_PROTOTYPE_SLICE_TO_ARRAY_FROM_TEMPLATE =
-      "src/" +
       "com/google/javascript/refactoring/examples/refasterjs/array_prototype_slice_to_array_from.js";
 
   @Test
   public void test_refactorings() throws Exception {
-    assertFileRefactoring(
-        ARRAY_PROTOTYPE_SLICE_TO_ARRAY_FROM_TEMPLATE,
-        TESTDATA_DIR,
-        "array_prototype_slice_to_array_from_in.js",
-        ImmutableList.of("goog_base.js"),
-        "array_prototype_slice_to_array_from_out.js");
+    RefasterJsTestCase.builder()
+        .setTemplatePath(ARRAY_PROTOTYPE_SLICE_TO_ARRAY_FROM_TEMPLATE)
+        .setInputPath(TESTDATA_DIR + "/array_prototype_slice_to_array_from_in.js")
+        .addExpectedOutputPath(TESTDATA_DIR + "/array_prototype_slice_to_array_from_out.js")
+        .addAdditionalSourcePath(TESTDATA_DIR + "/goog_base.js")
+        .test();
   }
 }

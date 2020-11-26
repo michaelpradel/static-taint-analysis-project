@@ -19,6 +19,8 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.annotations.GwtIncompatible;
@@ -96,8 +98,8 @@ public class SourceFile implements StaticSourceFile, Serializable {
       throw new IllegalArgumentException("a source must have a name");
     }
 
-    if (!"/".equals(File.separator)) {
-      this.fileName = fileName.replace(File.separator, "/");
+    if (!"/".equals(Platform.getFileSeperator())) {
+      this.fileName = fileName.replace(Platform.getFileSeperator(), "/");
     } else {
       this.fileName = fileName;
     }
@@ -213,7 +215,7 @@ public class SourceFile implements StaticSourceFile, Serializable {
       return search + 1; // lines are 1-based.
     } else {
       int insertionPoint = -1 * (search + 1);
-      return Math.min(insertionPoint - 1, lineOffsets.length - 1) + 1;
+      return min(insertionPoint - 1, lineOffsets.length - 1) + 1;
     }
   }
 
@@ -267,13 +269,61 @@ public class SourceFile implements StaticSourceFile, Serializable {
   }
 
   /**
-   * Get a region around the indicated line number. The exact definition of a
-   * region is implementation specific, but it must contain the line indicated
-   * by the line number. A region must not start or end by a carriage return.
+   * Gets the source lines starting at `lineNumber` and continuing until `length`. Omits any
+   * trailing newlines.
    *
    * @param lineNumber the line number, 1 being the first line of the file.
-   * @return The line indicated. Returns {@code null} if it does not exist,
-   *     or if there was an IO exception.
+   * @param length the number of characters desired, starting at the 0th character of the specified
+   *     line. If negative or 0, returns a single line.
+   * @return The line(s) indicated. Returns {@code null} if it does not exist or if there was an IO
+   *     exception.
+   */
+  public Region getLines(int lineNumber, int length) {
+    findLineOffsets();
+    if (lineNumber > lineOffsets.length) {
+      return null;
+    }
+
+    if (lineNumber < 1) {
+      lineNumber = 1;
+    }
+    if (length <= 0) {
+      length = 1;
+    }
+
+    String js = "";
+    try {
+      js = getCode();
+    } catch (IOException e) {
+      return null;
+    }
+
+    int pos = lineOffsets[lineNumber - 1];
+    if (pos == js.length()) {
+      return new SimpleRegion(
+          lineNumber, lineNumber, ""); // Happens when asking for the last empty line in a file.
+    }
+    int endChar = pos;
+    int endLine = lineNumber;
+    // go through lines until we've reached the end of the file or met the specified length.
+    for (; endChar < pos + length && endLine <= lineOffsets.length; endLine++) {
+      endChar = (endLine < lineOffsets.length) ? lineOffsets[endLine] : js.length();
+    }
+
+    if (js.charAt(endChar - 1) == '\n') {
+      return new SimpleRegion(lineNumber, endLine, js.substring(pos, endChar - 1));
+    }
+    return new SimpleRegion(lineNumber, endLine, js.substring(pos, endChar));
+  }
+
+  /**
+   * Get a region around the indicated line number. The exact definition of a region is
+   * implementation specific, but it must contain the line indicated by the line number. A region
+   * must not start or end by a carriage return.
+   *
+   * @param lineNumber the line number, 1 being the first line of the file.
+   * @return The line indicated. Returns {@code null} if it does not exist, or if there was an IO
+   *     exception.
    */
   public Region getRegion(int lineNumber) {
     String js = "";
@@ -283,8 +333,7 @@ public class SourceFile implements StaticSourceFile, Serializable {
       return null;
     }
     int pos = 0;
-    int startLine = Math.max(1,
-        lineNumber - (SOURCE_EXCERPT_REGION_LENGTH + 1) / 2 + 1);
+    int startLine = max(1, lineNumber - (SOURCE_EXCERPT_REGION_LENGTH + 1) / 2 + 1);
     for (int n = 1; n < startLine; n++) {
       int nextpos = js.indexOf('\n', pos);
       if (nextpos == -1) {
@@ -352,14 +401,15 @@ public class SourceFile implements StaticSourceFile, Serializable {
   private static final String BANG_SLASH = "!/";
 
   private static boolean isZipEntry(String path) {
-    return path.contains(".zip!" + File.separator)
+    return path.contains(".zip!" + Platform.getFileSeperator())
         && (path.endsWith(".js") || path.endsWith(".js.map"));
   }
 
   @GwtIncompatible("java.io.File")
   private static SourceFile fromZipEntry(String zipURL, Charset inputCharset, SourceKind kind) {
     checkArgument(isZipEntry(zipURL));
-    String[] components = zipURL.split(Pattern.quote(BANG_SLASH.replace("/", File.separator)));
+    String[] components =
+        zipURL.split(Pattern.quote(BANG_SLASH.replace("/", Platform.getFileSeperator())));
     try {
       String zipPath = components[0];
       String relativePath = components[1];
@@ -391,7 +441,8 @@ public class SourceFile implements StaticSourceFile, Serializable {
         .withCharset(inputCharset)
         .withOriginalPath(originalZipPath + BANG_SLASH + entryPath)
         .buildFromZipEntry(
-            new ZipEntryReader(absoluteZipPath, entryPath.replace(File.separator, "/")));
+            new ZipEntryReader(
+                absoluteZipPath, entryPath.replace(Platform.getFileSeperator(), "/")));
   }
 
   @GwtIncompatible("java.io.File")

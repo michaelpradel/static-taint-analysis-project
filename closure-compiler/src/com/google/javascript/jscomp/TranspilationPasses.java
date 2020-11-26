@@ -17,10 +17,12 @@
 package com.google.javascript.jscomp;
 
 import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES2018;
+import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES2020;
 import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES6;
 import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES7;
 import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES8;
 import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES_NEXT;
+import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES_NEXT_IN;
 
 import com.google.javascript.jscomp.Es6RewriteDestructuring.ObjectDestructuringRewriteMode;
 import com.google.javascript.jscomp.NodeTraversal.Callback;
@@ -48,19 +50,18 @@ public class TranspilationPasses {
                       compiler,
                       compiler.getModuleMetadataMap(),
                       compiler.getModuleMap(),
-                      preprocessorTableFactory.getInstanceOrNull());
+                      preprocessorTableFactory.getInstanceOrNull(),
+                      compiler.getTopScope());
                 })
-            .setFeatureSet(ES_NEXT)
+            .setFeatureSet(ES_NEXT_IN)
             .build());
   }
 
-  public static void addPreTypecheckTranspilationPasses(
+  public static void addTranspilationRuntimeLibraries(
       List<PassFactory> passes, CompilerOptions options) {
-
-    // TODO(bradfordcsmith): Rename this since it isn't just libraries for ES6 features anymore.
-    // Inject runtime libraries needed for the transpilation we will have to do.
-    passes.add(es6InjectRuntimeLibraries);
-
+    // Inject runtime libraries needed for the transpilation we will have to do. Should run before
+    // typechecking.
+    passes.add(injectTranspilationRuntimeLibraries);
   }
 
   public static void addEs6ModuleToCjsPass(List<PassFactory> passes) {
@@ -74,22 +75,44 @@ public class TranspilationPasses {
   /** Adds transpilation passes that should run after all checks are done. */
   public static void addPostCheckTranspilationPasses(
       List<PassFactory> passes, CompilerOptions options) {
-    if (options.needsTranspilationFrom(FeatureSet.ES_NEXT)) {
+    // Note that, for features >ES8 we detect feature by feature rather than by yearly languages
+    // in order to handle FeatureSet.BROWSER_2020, which is ES2019 without the new RegExp features.
+    if (options.needsTranspilationOf(Feature.NUMERIC_SEPARATOR)) {
+      // Numeric separators are flagged as present by the parser,
+      // but never actually represented in the AST.
+      // The only thing we need to do is mark them as not present in the AST.
+      passes.add(
+          createFeatureRemovalPass("markNumericSeparatorsRemoved", Feature.NUMERIC_SEPARATOR));
+    }
+
+    if (options.needsTranspilationOf(Feature.OPTIONAL_CHAINING)) {
+      passes.add(rewriteOptionalChainingOperator);
+    }
+
+    if (options.needsTranspilationOf(Feature.BIGINT)) {
+      passes.add(reportBigIntLiteralTranspilationUnsupported);
+    }
+
+    if (options.needsTranspilationOf(Feature.NULL_COALESCE_OP)) {
+      passes.add(rewriteNullishCoalesceOperator);
+    }
+
+    if (options.needsTranspilationOf(Feature.OPTIONAL_CATCH_BINDING)) {
       passes.add(rewriteCatchWithNoBinding);
     }
 
-    if (options.needsTranspilationFrom(ES2018)) {
+    if (options.needsTranspilationOf(Feature.FOR_AWAIT_OF)
+        || options.needsTranspilationOf(Feature.ASYNC_GENERATORS)) {
       passes.add(rewriteAsyncIteration);
+    }
+
+    if (options.needsTranspilationOf(Feature.OBJECT_LITERALS_WITH_SPREAD)
+        || options.needsTranspilationOf(Feature.OBJECT_PATTERN_REST)) {
       passes.add(rewriteObjectSpread);
     }
 
     if (options.needsTranspilationFrom(ES8)) {
-      // Trailing commas in parameter lists are flagged as present by the parser,
-      // but never actually represented in the AST.
-      // The only thing we need to do is mark them as not present in the AST.
-      passes.add(
-          createFeatureRemovalPass(
-              "markTrailingCommasInParameterListsRemoved", Feature.TRAILING_COMMA_IN_PARAM_LIST));
+      passes.add(removeTrailingCommaFromParamList);
       passes.add(rewriteAsyncFunctions);
     }
 
@@ -118,6 +141,7 @@ public class TranspilationPasses {
       passes.add(es6SplitVariableDeclarations);
       passes.add(
           getEs6RewriteDestructuring(ObjectDestructuringRewriteMode.REWRITE_ALL_OBJECT_PATTERNS));
+      passes.add(rewriteNewDotTarget);
       passes.add(es6RewriteArrowFunction);
       passes.add(es6ExtractClasses);
       passes.add(es6RewriteClass);
@@ -127,7 +151,6 @@ public class TranspilationPasses {
       passes.add(rewriteBlockScopedFunctionDeclaration);
       passes.add(rewriteBlockScopedDeclaration);
       passes.add(rewriteGenerators);
-      passes.add(es6ConvertSuperConstructorCalls);
     } else if (options.needsTranspilationOf(Feature.OBJECT_PATTERN_REST)) {
       passes.add(es6RenameVariablesInParamLists);
       passes.add(es6SplitVariableDeclarations);
@@ -202,6 +225,27 @@ public class TranspilationPasses {
           .setFeatureSet(ES_NEXT)
           .build();
 
+  private static final PassFactory rewriteNewDotTarget =
+      PassFactory.builderForHotSwap()
+          .setName("rewriteNewDotTarget")
+          .setInternalFactory(RewriteNewDotTarget::new)
+          .setFeatureSet(ES_NEXT)
+          .build();
+
+  private static final PassFactory removeTrailingCommaFromParamList =
+      PassFactory.builderForHotSwap()
+          .setName("removeTrailingCommaFromParamList")
+          .setInternalFactory(RemoveTrailingCommaFromParamList::new)
+          .setFeatureSet(ES_NEXT)
+          .build();
+
+  private static final PassFactory reportBigIntLiteralTranspilationUnsupported =
+      PassFactory.builderForHotSwap()
+          .setName("reportBigIntTranspilationUnsupported")
+          .setInternalFactory(ReportBigIntLiteralTranspilationUnsupported::new)
+          .setFeatureSet(ES2020)
+          .build();
+
   private static final PassFactory rewriteExponentialOperator =
       PassFactory.builderForHotSwap()
           .setName("rewriteExponentialOperator")
@@ -267,7 +311,12 @@ public class TranspilationPasses {
   static final PassFactory rewritePolyfills =
       PassFactory.builderForHotSwap()
           .setName("RewritePolyfills")
-          .setInternalFactory(RewritePolyfills::new)
+          .setInternalFactory(
+              (compiler) ->
+                  new RewritePolyfills(
+                      compiler,
+                      compiler.getOptions().getRewritePolyfills(),
+                      compiler.getOptions().getIsolatePolyfills()))
           .setFeatureSet(FeatureSet.latest())
           .build();
 
@@ -278,13 +327,6 @@ public class TranspilationPasses {
           .setFeatureSet(FeatureSet.latest())
           .build();
 
-  static final PassFactory es6ConvertSuperConstructorCalls =
-      PassFactory.builderForHotSwap()
-          .setName("es6ConvertSuperConstructorCalls")
-          .setInternalFactory(Es6ConvertSuperConstructorCalls::new)
-          .setFeatureSet(ES8)
-          .build();
-
   static final PassFactory es6ConvertSuper =
       PassFactory.builderForHotSwap()
           .setName("es6ConvertSuper")
@@ -292,12 +334,12 @@ public class TranspilationPasses {
           .setFeatureSet(ES2018)
           .build();
 
-  /** Injects runtime library code needed for transpiled ES6 code. */
-  static final PassFactory es6InjectRuntimeLibraries =
+  /** Injects runtime library code needed for transpiled ES6+ code. */
+  static final PassFactory injectTranspilationRuntimeLibraries =
       PassFactory.builderForHotSwap()
           .setName("es6InjectRuntimeLibraries")
-          .setInternalFactory(Es6InjectRuntimeLibraries::new)
-          .setFeatureSet(ES_NEXT)
+          .setInternalFactory(InjectTranspilationRuntimeLibraries::new)
+          .setFeatureSet(ES_NEXT_IN)
           .build();
 
   /** Transpiles REST parameters and SPREAD in both array literals and function calls. */
@@ -345,6 +387,21 @@ public class TranspilationPasses {
           .setName("rewriteGenerators")
           .setInternalFactory(Es6RewriteGenerators::new)
           .setFeatureSet(ES8)
+          .build();
+
+  static final PassFactory rewriteOptionalChainingOperator =
+      PassFactory.builderForHotSwap()
+          .setName("rewriteOptionalChainingOperator")
+          .setInternalFactory(RewriteOptionalChainingOperator::new)
+          // TODO(b/161166856) change to ES2020 when optional chaining moves there.
+          .setFeatureSet(ES_NEXT_IN)
+          .build();
+
+  static final PassFactory rewriteNullishCoalesceOperator =
+      PassFactory.builderForHotSwap()
+          .setName("rewriteNullishCoalesceOperator")
+          .setInternalFactory(RewriteNullishCoalesceOperator::new)
+          .setFeatureSet(ES2020)
           .build();
 
   /**
@@ -462,7 +519,7 @@ public class TranspilationPasses {
                 }
               };
             })
-        .setFeatureSet(FeatureSet.latest())
+        .setFeatureSet(FeatureSet.ES_NEXT_IN)
         .build();
   }
 }

@@ -107,16 +107,17 @@ class ReplaceCssNames implements CompilerPass {
 
   private CssRenamingMap symbolMap;
 
-  private final Set<String> whitelist;
+  private final Set<String> skiplist;
 
   private JSType nativeStringType;
 
-  ReplaceCssNames(AbstractCompiler compiler,
+  ReplaceCssNames(
+      AbstractCompiler compiler,
       @Nullable Map<String, Integer> cssNames,
-      @Nullable Set<String> whitelist) {
+      @Nullable Set<String> skiplist) {
     this.compiler = compiler;
     this.cssNames = cssNames;
-    this.whitelist = whitelist;
+    this.skiplist = skiplist;
   }
 
   private JSType getNativeStringType() {
@@ -207,8 +208,8 @@ class ReplaceCssNames implements CompilerPass {
      */
     private void processStringNode(Node n) {
       String name = n.getString();
-      if (whitelist != null && whitelist.contains(name)) {
-        // We apply the whitelist before splitting on dashes, and not after.
+      if (skiplist != null && skiplist.contains(name)) {
+        // We apply the skiplist before splitting on dashes, and not after.
         // External substitution maps should do the same.
         return;
       }
@@ -247,11 +248,8 @@ class ReplaceCssNames implements CompilerPass {
         // done the full replace. The statistics are collected on a
         // per-part basis.
         for (String element : parts) {
-          Integer count = cssNames.get(element);
-          if (count == null) {
-            count = 0;
-          }
-          cssNames.put(element, count.intValue() + 1);
+          int count = cssNames.getOrDefault(element, 0);
+          cssNames.put(element, count + 1);
         }
       }
     }

@@ -43,7 +43,6 @@ import static com.google.javascript.rhino.jstype.TernaryValue.FALSE;
 import static com.google.javascript.rhino.jstype.TernaryValue.TRUE;
 import static com.google.javascript.rhino.jstype.TernaryValue.UNKNOWN;
 
-
 /**
  * Null type.
  */
@@ -52,6 +51,11 @@ public final class NullType extends ValueType {
 
   NullType(JSTypeRegistry registry) {
     super(registry);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.NULL;
   }
 
   @Override
@@ -85,6 +89,11 @@ public final class NullType extends ValueType {
   }
 
   @Override
+  public JSType restrictByNotNull() {
+    return registry.getNativeType(JSTypeNative.NO_TYPE);
+  }
+
+  @Override
   public TernaryValue testForEquality(JSType that) {
     TernaryValue result = super.testForEquality(that);
     if (result != null) {
@@ -97,11 +106,6 @@ public final class NullType extends ValueType {
       return UNKNOWN;
     }
     return FALSE;
-  }
-
-  @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(getDisplayName());
   }
 
   @Override

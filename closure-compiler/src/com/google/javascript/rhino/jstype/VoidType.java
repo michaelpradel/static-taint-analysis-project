@@ -43,7 +43,6 @@ import static com.google.javascript.rhino.jstype.TernaryValue.FALSE;
 import static com.google.javascript.rhino.jstype.TernaryValue.TRUE;
 import static com.google.javascript.rhino.jstype.TernaryValue.UNKNOWN;
 
-
 /**
  * Void type whose only element is the {@code undefined} value.
  */
@@ -52,6 +51,11 @@ public class VoidType extends ValueType {
 
   VoidType(JSTypeRegistry registry) {
     super(registry);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.VOID;
   }
 
   @Override
@@ -103,11 +107,6 @@ public class VoidType extends ValueType {
   @Override
   public boolean isExplicitlyVoidable() {
     return true;
-  }
-
-  @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(getDisplayName());
   }
 
   @Override

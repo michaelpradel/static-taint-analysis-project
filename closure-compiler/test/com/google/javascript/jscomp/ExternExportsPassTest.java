@@ -18,6 +18,8 @@ package com.google.javascript.jscomp;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.testing.NoninjectingCompiler;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import java.util.function.Consumer;
 import org.junit.Before;
 import org.junit.Test;
@@ -1070,7 +1072,7 @@ public final class ExternExportsPassTest extends CompilerTestCase {
         lines(
             "/**",
             " * @param {number} a",
-            " * @return {!Iterator<number>}",
+            " * @return {!Iterator<number,?,?>}",
             " */",
             "var externalName = function(a) {",
             "};",
@@ -1092,7 +1094,7 @@ public final class ExternExportsPassTest extends CompilerTestCase {
         lines(
             "/**",
             " * @param {number} a",
-            " * @return {!AsyncGenerator<number>}",
+            " * @return {!AsyncGenerator<number,?,?>}",
             " */",
             "var externalName = function(a) {",
             "};",

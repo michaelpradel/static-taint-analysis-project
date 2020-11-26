@@ -20,6 +20,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.javascript.jscomp.AnalyzePrototypeProperties.ClassMemberFunction;
 import com.google.javascript.jscomp.AnalyzePrototypeProperties.NameInfo;
 import com.google.javascript.jscomp.AnalyzePrototypeProperties.Property;
@@ -29,10 +30,8 @@ import com.google.javascript.rhino.Node;
 import java.util.Collection;
 import java.util.Iterator;
 
-/**
- * Move prototype methods into later chunks.
- */
-class CrossChunkMethodMotion implements CompilerPass {
+/** Move prototype methods into later chunks. */
+public class CrossChunkMethodMotion implements CompilerPass {
 
   // Internal errors
   static final DiagnosticType NULL_COMMON_MODULE_ERROR = DiagnosticType.error(
@@ -49,20 +48,20 @@ class CrossChunkMethodMotion implements CompilerPass {
   static final String STUB_METHOD_NAME = "JSCompiler_stubMethod";
   static final String UNSTUB_METHOD_NAME = "JSCompiler_unstubMethod";
 
-  // Visible for testing
-  static final String STUB_DECLARATIONS =
-      "var JSCompiler_stubMap = [];" +
-      "function JSCompiler_stubMethod(JSCompiler_stubMethod_id) {" +
-      "  return function() {" +
-      "    return JSCompiler_stubMap[JSCompiler_stubMethod_id].apply(" +
-      "        this, arguments);" +
-      "  };" +
-      "}" +
-      "function JSCompiler_unstubMethod(" +
-      "    JSCompiler_unstubMethod_id, JSCompiler_unstubMethod_body) {" +
-      "  return JSCompiler_stubMap[JSCompiler_unstubMethod_id] = " +
-      "      JSCompiler_unstubMethod_body;" +
-      "}";
+  @VisibleForTesting
+  public static final String STUB_DECLARATIONS =
+      "var JSCompiler_stubMap = [];"
+          + "function JSCompiler_stubMethod(JSCompiler_stubMethod_id) {"
+          + "  return function() {"
+          + "    return JSCompiler_stubMap[JSCompiler_stubMethod_id].apply("
+          + "        this, arguments);"
+          + "  };"
+          + "}"
+          + "function JSCompiler_unstubMethod("
+          + "    JSCompiler_unstubMethod_id, JSCompiler_unstubMethod_body) {"
+          + "  return JSCompiler_stubMap[JSCompiler_unstubMethod_id] = "
+          + "      JSCompiler_unstubMethod_body;"
+          + "}";
 
   /**
    * Creates a new pass for moving prototype properties.
@@ -86,7 +85,7 @@ class CrossChunkMethodMotion implements CompilerPass {
         new AnalyzePrototypeProperties(
             compiler, moduleGraph, canModifyExterns, false /* anchorUnusedVars */, noStubFunctions);
     this.noStubFunctions = noStubFunctions;
-    this.astFactory = compiler.createAstFactory();
+    this.astFactory = compiler.createAstFactoryWithoutTypes();
   }
 
   @Override
@@ -152,7 +151,8 @@ class CrossChunkMethodMotion implements CompilerPass {
     // 1) We can move it deeper in the chunk graph, and
     // 2) it's a function, and
     // 3) it is not a GETTER_DEF or a SETTER_DEF, and
-    // 4) the class is available in the global scope.
+    // 4) it does not refer to `super`
+    // 5) the class is available in the global scope.
     //
     // #1 should be obvious. #2 is more subtle. It's possible
     // to copy off of a prototype, as in the code:
@@ -165,6 +165,11 @@ class CrossChunkMethodMotion implements CompilerPass {
     // replace it with a stub function so that it preserves its original
     // behavior.
     if (prop.getRootVar() == null || !prop.getRootVar().isGlobal()) {
+      return;
+    }
+
+    if (nameInfo.referencesSuper()) {
+      // It is illegal to move `super` outside of a member function def.
       return;
     }
 
@@ -419,8 +424,10 @@ class CrossChunkMethodMotion implements CompilerPass {
 
     // We should only move a property across chunks if:
     // 1) We can move it deeper in the chunk graph,
-    // 2) and it's a normal member function, and not a GETTER_DEF or a SETTER_DEF,
-    // 3) and the class is available in the global scope.
+    // 2) and it's a normal member function, and not a GETTER_DEF or a SETTER_DEF, or
+    //    or the class constructor.
+    // 3) and it does not refer to `super`, which would be invalid outside of the class.
+    // 4) and the class is available in the global scope.
     Var rootVar = classMemberFunction.getRootVar();
     if (rootVar == null || !rootVar.isGlobal()) {
       return;
@@ -431,6 +438,17 @@ class CrossChunkMethodMotion implements CompilerPass {
     // Only attempt to move normal member functions.
     // A getter or setter cannot be as easily defined outside of the class to which it belongs.
     if (!definitionNode.isMemberFunctionDef()) {
+      return;
+    }
+
+    if (NodeUtil.isEs6ConstructorMemberFunctionDef(definitionNode)) {
+      // Constructor functions cannot be moved.
+      return;
+    }
+
+    if (nameInfo.referencesSuper()) {
+      // Do not move methods containing `super`, because it doesn't work outside of a
+      // class method or object literal method.
       return;
     }
 

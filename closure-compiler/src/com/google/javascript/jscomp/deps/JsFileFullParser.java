@@ -57,11 +57,20 @@ import javax.annotation.Nullable;
 public class JsFileFullParser {
   /** The dependency information contained in a .js source file. */
   public static final class FileInfo {
+    /** The module system declared by the file, e.g. goog.provide/goog.module. */
+    public enum ModuleType {
+      UNKNOWN,
+      GOOG_PROVIDE,
+      GOOG_MODULE,
+      ES_MODULE,
+    }
+
     public boolean goog = false;
     public boolean isConfig = false;
     public boolean isExterns = false;
     public boolean provideGoog = false;
     public boolean testonly = false;
+    public ModuleType moduleType = ModuleType.UNKNOWN;
 
     public final Set<String> hasSoyDelcalls = new TreeSet<>();
     public final Set<String> hasSoyDeltemplates = new TreeSet<>();
@@ -192,6 +201,23 @@ public class JsFileFullParser {
     } else if (module.isGoogModule()) {
       info.loadFlags.put("module", "goog");
     }
+    switch (module.moduleType()) {
+      case GOOG_PROVIDE:
+        info.moduleType = FileInfo.ModuleType.GOOG_PROVIDE;
+        break;
+      case GOOG_MODULE:
+      case LEGACY_GOOG_MODULE:
+        info.moduleType = FileInfo.ModuleType.GOOG_MODULE;
+        break;
+      case ES6_MODULE:
+        info.moduleType = FileInfo.ModuleType.ES_MODULE;
+        break;
+      case COMMON_JS:
+      case SCRIPT:
+        // Treat these as unknown for now; we can extend the enum if we care about these.
+        info.moduleType = FileInfo.ModuleType.UNKNOWN;
+        break;
+    }
     info.goog = module.usesClosure();
     // If something doesn't have an external dependency on Closure, then it does not have any
     // externally required files or symbols to provide. This is needed for bundles that contain
@@ -199,8 +225,8 @@ public class JsFileFullParser {
     // anything at all.
     if (module.usesClosure()) {
       info.provides.addAll(module.googNamespaces());
-      info.requires.addAll(module.requiredGoogNamespaces());
-      info.typeRequires.addAll(module.requiredTypes());
+      info.requires.addAll(module.stronglyRequiredGoogNamespaces());
+      info.typeRequires.addAll(module.weaklyRequiredGoogNamespaces());
       info.testonly = module.isTestOnly();
     }
     info.importedModules.addAll(module.es6ImportSpecifiers().elementSet());

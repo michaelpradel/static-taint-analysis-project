@@ -21,6 +21,7 @@ import static com.google.common.truth.Truth.assertThat;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.javascript.jscomp.AccessorSummary.PropertyAccessKind;
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.jscomp.NodeTraversal.AbstractPostOrderCallback;
 import com.google.javascript.jscomp.testing.JSCompCorrespondences;
 import com.google.javascript.rhino.Node;
@@ -35,9 +36,7 @@ import org.junit.runners.JUnit4;
 /**
  * Tests for {@link PureFunctionIdentifier}
  *
- * @author johnlenz@google.com (John Lenz)
  */
-
 @RunWith(JUnit4.class)
 public final class PureFunctionIdentifierTest extends CompilerTestCase {
   List<Node> noSideEffectCalls;
@@ -200,6 +199,8 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
   public void setUp() throws Exception {
     super.setUp();
 
+    // Allow testing of features that are not yet fully supported.
+    setAcceptedLanguage(LanguageMode.UNSUPPORTED);
     enableNormalize();
     enableGatherExternProperties();
     enableTypeCheck();
@@ -247,11 +248,60 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
         if (!compiler.getAstAnalyzer().functionCallHasSideEffects(n)) {
           noSideEffectCalls.add(n.getFirstChild());
         }
-        if (NodeUtil.callHasLocalResult(n)) {
-          localResultCalls.add(n.getFirstChild());
-        }
       }
     }
+  }
+
+  @Test
+  public void testOptionalChainGetProp() {
+    assertNoPureCalls("externObj?.sef1()");
+    assertPureCallsMarked("externObj?.nsef1()", ImmutableList.of("externObj?.nsef1"));
+  }
+
+  @Test
+  public void testOptionalChainGetElem() {
+    assertNoPureCalls("externObj?.['sef1']()");
+    // The use of `[]` hides the exact method being called from the compiler,
+    // so it will assume there are side-effects.
+    assertNoPureCalls("externObj?.['nsef1']()");
+  }
+
+  @Test
+  public void testOptionalChainCall() {
+    assertNoPureCalls("externObj.sef1?.()");
+    assertNoPureCalls("externObj?.sef1?.()");
+    assertPureCallsMarked("externObj.nsef1?.()", ImmutableList.of("externObj.nsef1"));
+    assertPureCallsMarked("externObj?.nsef1?.()", ImmutableList.of("externObj?.nsef1"));
+  }
+
+  @Test
+  public void testOptionalGetterAccess_hasSideEffects() {
+    assertNoPureCalls(
+        lines(
+            "class Foo { get getter() { } }", //
+            "",
+            "function foo(a) { a?.getter; }",
+            "foo(x);"));
+  }
+
+  @Test
+  public void testOptionalNormalPropAccess_hasNoSideEffects() {
+    assertPureCallsMarked(
+        lines(
+            "", //
+            "function foo(a) { a?.prop; }",
+            "foo(x);"),
+        ImmutableList.of("foo"));
+  }
+
+  @Test
+  public void testOptionalElementAccess_hasNoSideEffects() {
+    assertPureCallsMarked(
+        lines(
+            "", //
+            "function foo(a) { a?.['prop']; }",
+            "foo(x);"),
+        ImmutableList.of("foo"));
   }
 
   @Test
@@ -707,94 +757,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
   }
 
   @Test
-  public void testResultLocalitySimple() {
-    String prefix = "var g; function f(){";
-    String suffix = "} f()";
-    final List<String> fReturnsUnescaped = ImmutableList.of("f");
-    final List<String> fReturnsEscaped = ImmutableList.of();
-
-    // no return
-    assertUnescapedReturnCallsMarked(prefix + "" + suffix, fReturnsUnescaped);
-    // simple return expressions
-    assertUnescapedReturnCallsMarked(prefix + "return 1" + suffix, fReturnsUnescaped);
-    assertUnescapedReturnCallsMarked(prefix + "return 1 + 2" + suffix, fReturnsUnescaped);
-
-    // global result
-    assertUnescapedReturnCallsMarked(prefix + "return g" + suffix, fReturnsEscaped);
-
-    // multiple returns
-    assertUnescapedReturnCallsMarked(prefix + "return 1; return 2" + suffix, fReturnsUnescaped);
-    assertUnescapedReturnCallsMarked(prefix + "return 1; return g" + suffix, fReturnsEscaped);
-
-    // local var, not yet. Note we do not handle locals properly here.
-    assertUnescapedReturnCallsMarked(prefix + "var a = 1; return a" + suffix, fReturnsEscaped);
-
-    // mutate local var, not yet. Note we do not handle locals properly here.
-    assertUnescapedReturnCallsMarked(
-        prefix + "var a = 1; a = 2; return a" + suffix, fReturnsEscaped);
-    assertUnescapedReturnCallsMarked(
-        prefix + "var a = 1; a = 2; return a + 1" + suffix, fReturnsUnescaped);
-
-    // read from obj literal
-    assertUnescapedReturnCallsMarked(prefix + "return {foo : 1}.foo" + suffix, fReturnsEscaped);
-    assertUnescapedReturnCallsMarked(
-        prefix + "var a = {foo : 1}; return a.foo" + suffix, fReturnsEscaped);
-
-    // read from extern
-    assertUnescapedReturnCallsMarked(prefix + "return externObj" + suffix, ImmutableList.of());
-    assertUnescapedReturnCallsMarked(
-        "function inner(x) { x.foo = 3; }" /* to suppress missing property */
-            + prefix
-            + "return externObj.foo"
-            + suffix,
-        ImmutableList.of());
-  }
-
-  @Test
-  public void testReturnLocalityTaintObjectLiteralWithGlobal() {
-    // return empty object literal.  This is completely local
-    String source = lines(
-        "function f() { return {} }",
-        "f();"
-    );
-    assertUnescapedReturnCallsMarked(source, ImmutableList.of("f"));
-    // return obj literal with global property is still local.
-    source = lines(
-        "var global = new Object();",
-        "function f() { return {'asdf': global} }",
-        "f();");
-    assertUnescapedReturnCallsMarked(source, ImmutableList.of("f"));
-  }
-
-  @Test
-  public void testReturnLocalityTaintArrayLiteralWithGlobal() {
-    String source =
-        lines(
-            "function f() { return []; }",
-            "f();",
-            "function g() { return [1, {}]; }",
-            "g();");
-    assertUnescapedReturnCallsMarked(source, ImmutableList.of("f", "g"));
-    // return array literal with global value is still a local value.
-    source =
-        lines(
-            "var global = new Object();",
-            "function f() { return [2 ,global]; }",
-            "f();");
-    assertUnescapedReturnCallsMarked(source, ImmutableList.of("f"));
-  }
-
-  @Test
-  public void testReturnLocalityMultipleDefinitionsSameName() {
-    String source = lines(
-            "var global = new Object();",
-            "A.func = function() {return global}", // return global (taintsReturn)
-            "B.func = function() {return 1; }", // returns local
-            "C.func();");
-    assertUnescapedReturnCallsMarked(source, ImmutableList.of());
-  }
-
-  @Test
   public void testExternCalls() {
     testExternCallsForTypeInferenceMode(/* typeChecked= */ true);
   }
@@ -873,6 +835,12 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             , "f()"
     );
     assertNoPureCalls(source);
+  }
+
+  @Test
+  public void testOptionalCall() {
+    String source = lines("function f() {return g?.()}", "function g() {return 42}", "f?.()");
+    assertPureCallsMarked(source, ImmutableList.of("g", "f"));
   }
 
   @Test
@@ -984,8 +952,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "f()"),
         ImmutableList.of("f"));
 
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands let/const
-    disableTypeCheck();
     assertPureCallsMarked(
         lines(
             "function f() {const x = []; x[0] = 1;}", // preserve newline
@@ -1017,8 +983,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "f()"),
         ImmutableList.of("f"));
 
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands let/const
-    disableTypeCheck();
     assertPureCallsMarked(
         lines(
             "function f() {", // preserve newline
@@ -1041,8 +1005,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "f()"),
         ImmutableList.of("f"));
 
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands let/const
-    disableTypeCheck();
     assertPureCallsMarked(
         lines(
             "/** @constructor A */ function A() {};",
@@ -1132,8 +1094,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "f()"),
         ImmutableList.of("f"));
 
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands let/const
-    disableTypeCheck();
     assertPureCallsMarked(
         lines(
             "function f() {const x = []; { x[0] = 1; } }", // preserve newline
@@ -1143,7 +1103,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testLocalizedSideEffects13() {
-    disableTypeCheck();
     String source = lines(
         "function f() {var [x, y] = [3, 4]; }",
         "f()");
@@ -1152,7 +1111,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testLocalizedSideEffects14() {
-    disableTypeCheck();
     String source = lines(
         "function f() {var x; if (true) { [x] = [5]; } }",
         "f()");
@@ -1161,7 +1119,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testLocalizedSideEffects15() {
-    disableTypeCheck();
     String source = lines(
         "function f() {var {length} = 'a string'; }",
         "f()");
@@ -1170,85 +1127,81 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testLocalizedSideEffects16() {
-    disableTypeCheck();
-    String source = lines(
-        "function f(someArray) {var [a, , b] = someArray; }",
-        "f()");
+    String source = lines("function f(someArray) {var [a, , b] = someArray; }", "f([])");
     assertPureCallsMarked(source, ImmutableList.of("f"));
   }
 
   @Test
   public void testLocalizedSideEffects17() {
-    disableTypeCheck();
-    String source = lines(
-        "function f(someObj) {var { very: { nested: { lhs: pattern }} } = someObj; }",
-        "f()");
+
+    String source =
+        lines(
+            "function f(someObj) {var { very: { nested: { lhs: pattern }} } = someObj; }",
+            "f({very: {nested: {lhs: 0}}})");
     assertPureCallsMarked(source, ImmutableList.of("f"));
   }
 
   @Test
   public void testLocalizedSideEffects18() {
-    disableTypeCheck();
-    String source = lines(
-        "function SomeCtor() { [this.x, this.y] = getCoordinates(); }",
-        "new SomeCtor()");
+    String source =
+        lines(
+            "/** @constructor */",
+            "function SomeCtor() { [this.x, this.y] = getCoordinates(); }",
+            "new SomeCtor()");
     assertNoPureCalls(source);
   }
 
   @Test
   public void testLocalizedSideEffects19() {
-    disableTypeCheck();
-    String source = lines(
-        "function SomeCtor() { [this.x, this.y] = [0, 1]; }",
-        "new SomeCtor()");
+    String source =
+        lines(
+            "/** @constructor */",
+            "function SomeCtor() { [this.x, this.y] = [0, 1]; }",
+            "new SomeCtor()");
     assertPureCallsMarked(source, ImmutableList.of("SomeCtor"));
   }
 
   @Test
   public void testLocalizedSideEffects20() {
-    disableTypeCheck();
-    String source = lines(
-        "function SomeCtor() { this.x += 1; }",
-        "new SomeCtor()");
+    String source =
+        lines(
+            "/** @constructor */", //
+            "function SomeCtor() { this.x += 1; }",
+            "new SomeCtor()");
     assertPureCallsMarked(source, ImmutableList.of("SomeCtor"));
   }
 
   @Test
   public void testLocalizedSideEffects21() {
-    // TODO(bradfordcsmith): Remove NEITHER when type checkers understand destructuring and
-    // let/const.
-    disableTypeCheck();
-    String source = lines("function f(values) { const x = {}; [x.y, x.z] = values; }", "f()");
+    String source = lines("function f(values) { const x = {}; [x.y, x.z] = values; }", "f([])");
     assertPureCallsMarked(source, ImmutableList.of("f"));
   }
 
   @Test
   public void testLocalizedSideEffects22() {
-    disableTypeCheck();
-    String source = lines(
-        "var x = {}; function f(values) { [x.y, x.z] = values; }",
-        "f()");
+    String source =
+        lines(
+            "var x = {};", //
+            "function f(values) { [x.y, x.z] = values; }",
+            "f([])");
     assertNoPureCalls(source);
   }
 
   @Test
   public void testLocalizedSideEffects23() {
-    // TODO(bradfordcsmith): Remove NEITHER when type checkers understand destructuring and
-    // let/const.
-    disableTypeCheck();
     String source =
         lines(
             "function f(values) { const x = {}; [x.y, x.z = defaultNoSideEffects] = values; }",
-            "f()");
+            "f([])");
     assertPureCallsMarked(source, ImmutableList.of("f"));
   }
 
   @Test
   public void testLocalizedSideEffects24() {
-    disableTypeCheck();
-    String source = lines(
-        "function f(values) { var x = {}; [x.y, x.z = defaultWithSideEffects()] = values; }",
-        "f()");
+    String source =
+        lines(
+            "function f(values) { var x = {}; [x.y, x.z = defaultWithSideEffects()] = values; }",
+            "f([])");
     assertNoPureCalls(source);
   }
 
@@ -1277,8 +1230,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "f()"),
         ImmutableList.of("f"));
 
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands let/const
-    disableTypeCheck();
     assertPureCallsMarked(
         lines(
             "function f() {const x = {foo : 0}; x.foo++}", // preserve newline
@@ -1303,13 +1254,10 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "f({foo : 0})"),
         ImmutableList.of("f"));
 
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands destructured parameters
-    disableTypeCheck();
-    assertPureCallsMarked(
+    assertNoPureCalls(
         lines(
             "function f({x}) {x.foo++}", // preserve newline
-            "f({x: {foo : 0}})"),
-        ImmutableList.of("f"));
+            "f({x: {foo : 0}})"));
   }
 
   @Test
@@ -1363,6 +1311,15 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
     assertCallableExpressionPure(false, "x ? externNsef1 : function() { throw 0; }");
   }
 
+  @Test
+  public void nullishCoalesce_pureAlias() {
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
+    assertCallableExpressionPure(true, "externNsef1 ?? externNsef2");
+    assertCallableExpressionPure(true, "externNsef1 ?? function() { }");
+    assertCallableExpressionPure(false, "externNsef1 ?? externSef2");
+    assertCallableExpressionPure(false, "externNsef1 ?? function() { throw 0; }");
+  }
+
   // End pure alias, start pure literal
 
   @Test
@@ -1395,6 +1352,15 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
     assertCallableExpressionPure(false, "function() { } && function() { throw 0; }");
     assertCallableExpressionPure(false, "function() { }, function() { throw 0; }");
     assertCallableExpressionPure(false, "x ? function() { } : function() { throw 0; }");
+  }
+
+  @Test
+  public void nullishCoalesce_pureLiteral() {
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
+    assertCallableExpressionPure(true, "function() { } ?? externNsef2");
+    assertCallableExpressionPure(true, "function() { } ?? function() { }");
+    assertCallableExpressionPure(false, "function() { } ?? externSef2");
+    assertCallableExpressionPure(false, "function() { } ?? function() { throw 0; }");
   }
 
   // End pure literal, start impure alias
@@ -1431,6 +1397,15 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
     assertCallableExpressionPure(false, "x ? externSef1 : function() { throw 0; }");
   }
 
+  @Test
+  public void nullishCoalesce_impureAlias() {
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
+    assertCallableExpressionPure(false, "externSef1 ?? externNsef2");
+    assertCallableExpressionPure(false, "externSef1 ?? function() { }");
+    assertCallableExpressionPure(false, "externSef1 ?? externSef2");
+    assertCallableExpressionPure(false, "externSef1 ?? function() { throw 0; }");
+  }
+
   // End impure alias, start impure literal
 
   @Test
@@ -1465,10 +1440,19 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
     assertCallableExpressionPure(false, "x ? function() { throw 0; } : function() { throw 0; }");
   }
 
+  @Test
+  public void nullishCoalesce_impureLiteral() {
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
+    assertCallableExpressionPure(false, "function() { throw 0; } ?? externNsef2");
+    assertCallableExpressionPure(false, "function() { throw 0; } ?? function() { }");
+    assertCallableExpressionPure(false, "function() { throw 0; } ?? externSef2");
+    assertCallableExpressionPure(false, "function() { throw 0; } ?? function() { throw 0; }");
+  }
+
   // End impure literal
 
   @Test
-  public void testKnownDynamicFunctions_areBlacklistedForAliasing() {
+  public void testKnownDynamicFunctions_areSkiplistedForAliasing() {
     for (String name : ImmutableList.of("call", "apply", "constructor")) {
       assertNoPureCalls(
           lines(
@@ -1494,6 +1478,130 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
         "function f(){return new A()}",
         "f()");
     assertPureCallsMarked(source, ImmutableList.of("Error"));
+  }
+
+  @Test
+  public void testThrow_insideTry_withCatch_hasNoSideEffects() {
+    String source =
+        lines(
+            "function f() {",
+            "  try {",
+            "    throw Error();",
+            "  } catch (e) {",
+            "  } finally {",
+            "  }",
+            "}",
+            "",
+            "f();");
+    assertPureCallsMarked(source, ImmutableList.of("f", "Error"));
+  }
+
+  @Test
+  public void testThrow_insideTry_withoutCatch_hasSideEffects() {
+    String source =
+        lines(
+            "function f() {",
+            "  try {",
+            "    throw Error();",
+            "  } finally {",
+            "  }",
+            "}",
+            "",
+            "f();");
+    assertPureCallsMarked(source, ImmutableList.of("Error"));
+  }
+
+  @Test
+  public void testThrow_insideCatch_hasSideEffects() {
+    String source =
+        lines(
+            "function f() {",
+            "  try {",
+            "  } catch (e) {",
+            "    throw Error();",
+            "  } finally {",
+            "  }",
+            "}",
+            "",
+            "f();");
+    assertPureCallsMarked(source, ImmutableList.of("Error"));
+  }
+
+  @Test
+  public void testThrow_insideFinally_hasSideEffects() {
+    String source =
+        lines(
+            "function f() {",
+            "  try {",
+            "  } catch (e) {",
+            "  } finally {",
+            "    throw Error();",
+            "  }",
+            "}",
+            "",
+            "f();");
+    assertPureCallsMarked(source, ImmutableList.of("Error"));
+  }
+
+  @Test
+  public void testThrow_insideTry_afterNestedTry_hasNoSideEffects() {
+    /** Ensure we track the stack of trys correctly, rather than just toggling a boolean. */
+    String source =
+        lines(
+            "function f() {",
+            "  try {",
+            "    try {",
+            "    } finally {",
+            "    }",
+            "",
+            "    throw Error();",
+            "  } catch (e) {",
+            "  } finally {",
+            "  }",
+            "}",
+            "",
+            "f();");
+    assertPureCallsMarked(source, ImmutableList.of("f", "Error"));
+  }
+
+  @Test
+  public void testThrow_insideFunction_insideTry_hasNoSideEffects() {
+    /** Ensure we track the stack of trys correctly, rather than just toggling a boolean. */
+    String source =
+        lines(
+            "function f() {",
+            "  try {",
+            "    function g() {",
+            "      throw Error();",
+            "    }",
+            "  } catch (e) {",
+            "  } finally {",
+            "  }",
+            "}",
+            "",
+            "f();");
+    assertPureCallsMarked(source, ImmutableList.of("f", "Error"));
+  }
+
+  @Test
+  public void testThrow_fromCallee_insideTry_withCatch_hasNoSideEffects() {
+    String source =
+        lines(
+            "function h() {",
+            "  throw Error();",
+            "}",
+            "",
+            "function f() {",
+            "  try {",
+            "    h()",
+            "  } catch (e) {",
+            "  } finally {",
+            "  }",
+            "}",
+            "",
+            "h();",
+            "f();");
+    assertPureCallsMarked(source, ImmutableList.of("f", "Error"));
   }
 
   @Test
@@ -1625,6 +1733,23 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
   }
 
   @Test
+  public void testAmbiguousDefinitionsBothCallThisWithOptionalChain() {
+    String source =
+        lines(
+            "B.f = function() {",
+            "  this.x = 1;",
+            "}",
+            "/** @constructor */ function C() {",
+            "  this.f?.apply(this);",
+            "}",
+            "C.prototype.f = function() {",
+            "  this.x = 2;",
+            "}",
+            "new C();");
+    assertPureCallsMarked(source, ImmutableList.of("C"));
+  }
+
+  @Test
   public void testAmbiguousDefinitionsAllCallThis() {
     String source =
         lines(
@@ -1668,22 +1793,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "B.a = function() {};",
             "var b = function() {",
             "  C.a({});",
-            "};",
-            "b();"),
-        ImmutableList.of("C.a", "b"));
-
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands destructuring parameters
-    disableTypeCheck();
-    assertPureCallsMarked(
-        lines(
-            "// Mutates argument",
-            "A.a = function([argument]) {",
-            "  argument.x = 2;",
-            "};",
-            "// No side effects",
-            "B.a = function() {};",
-            "var b = function() {",
-            "  C.a([{}]);",
             "};",
             "b();"),
         ImmutableList.of("C.a", "b"));
@@ -1845,6 +1954,17 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
   }
 
   @Test
+  public void testOptCallInConstructorThatModifiesThis() {
+    String source =
+        lines(
+            "/**@constructor*/function A(){this?.foo()}",
+            "A.prototype.foo = function(){this.data=24};",
+            "function f() {return new A}",
+            "f()");
+    assertPureCallsMarked(source, ImmutableList.of("A", "f"));
+  }
+
+  @Test
   public void testConstructorThatModifiesThis3() {
     // test chained
     String source = lines(
@@ -1910,13 +2030,28 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "f({});"),
         ImmutableList.of("f"));
 
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands destructuring parameters
-    disableTypeCheck();
     assertPureCallsMarked(
         lines(
-            "function f([x]) { x.y = 1; }", // preserve newline
-            "f([{}]);"),
+            "function f(x = {}) { x.y = 1; }", // preserve newline
+            "f({});"),
         ImmutableList.of("f"));
+  }
+
+  @Test
+  public void testMutatesArguments_notTrackedThroughDestructuring() {
+    assertNoPureCalls(
+        lines(
+            "const obj = {};", // preserve newline
+            "function f([x]) { x.y = 1; }",
+            "f({obj});",
+            ""));
+
+    // This is technically pure, but right now we don't track that the array being destructured was
+    // a literal containing literals.
+    assertNoPureCalls(
+        lines(
+            "function f([x]) { x.y = 1; }", // preserve newline
+            "f([{}]);"));
   }
 
   @Test
@@ -1944,15 +2079,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "function f(x) { x.y = 1; }", // preserve newline
             "function g(x) { f({}); x.y = 1; }",
             "g({});"),
-        ImmutableList.of("f", "g"));
-
-    // TODO(bradfordcsmith): Remove NEITHER when type checker understands destructuring parameters
-    disableTypeCheck();
-    assertPureCallsMarked(
-        lines(
-            "function f([x]) { x.y = 1; }", // preserve newline
-            "function g([x]) { f([{}]); x.y = 1; }",
-            "g([{}]);"),
         ImmutableList.of("f", "g"));
   }
 
@@ -1996,7 +2122,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testCallGenerator1() {
-    disableTypeCheck(); // type check for yield not yet implemented
     String source =
         lines(
             "var x = 0;",
@@ -2011,13 +2136,11 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
     Node lastRoot = getLastCompiler().getRoot().getLastChild();
     Node call = findQualifiedNameNode("f", lastRoot).getParent();
     assertThat(call.isNoSideEffectsCall()).isFalse();
-    assertThat(call.getSideEffectFlags())
-        .isEqualTo(new Node.SideEffectFlags().setReturnsTainted().valueOf());
+    assertThat(call.getSideEffectFlags()).isEqualTo(Node.SideEffectFlags.ALL_SIDE_EFFECTS);
   }
 
   @Test
   public void testCallGenerator2() {
-    disableTypeCheck(); // type check for yield not yet implemented
     String source = lines(
             "function* f() {",
             "  while (true) {",
@@ -2139,21 +2262,18 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testClassMethod1() {
-    disableTypeCheck();
     String source = "class C { m() { alert(1); } }; (new C).m();";
     assertPureCallsMarked(source, ImmutableList.of("C"));
   }
 
   @Test
   public void testClassMethod2() {
-    disableTypeCheck();
     String source = "class C { m() { } }; (new C).m();";
     assertPureCallsMarked(source, ImmutableList.of("C", "new C().m"));
   }
 
   @Test
   public void testClassMethod3() {
-    disableTypeCheck();
     String source = "class C { m1() { } m2() { this.m1(); }}; (new C).m2();";
     assertPureCallsMarked(source, ImmutableList.of("C", "this.m1", "new C().m2"));
   }
@@ -2331,8 +2451,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testGlobalScopeTaintedByWayOfThisPropertyAndForOfLoop() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "class C {",
@@ -2353,8 +2471,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testGlobalScopeTaintedByWayOfThisPropertyAndForOfLoopWithDestructuring() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "class C {",
@@ -2369,15 +2485,13 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "    }",
             "  }",
             "}",
-            "new C([]).m1()",
+            "new C([{prop: {}}]).m1()",
             "");
     assertPureCallsMarked(source, ImmutableList.of());
   }
 
   @Test
   public void testArgumentTaintedByWayOfFunctionScopedLet() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "function m1(elements) {",
@@ -2394,8 +2508,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testArgumentTaintedByWayOfFunctionScopedLetAssignedInForOf() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "function m1(elements) {",
@@ -2411,8 +2523,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testArgumentTaintedByWayOfFunctionScopedLetAssignedInForOfWithDestructuring() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "function m1(elements) {",
@@ -2421,15 +2531,13 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "    e.someProp = 1;",
             "  }",
             "}",
-            "m1([]);",
+            "m1([{e: {}}]);",
             "");
     assertPureCallsMarked(source, ImmutableList.of());
   }
 
   @Test
   public void testArgumentTaintedByWayOfForOfAssignmentToQualifiedName() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "function m1(obj, elements) {",
@@ -2445,7 +2553,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testArgumentTaintedByWayOfForInAssignmentToQualifiedName() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
     String source =
         lines(
             "/**",
@@ -2455,8 +2562,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             " */",
             "function m1(/** ? */ obj, /** Object */ propObj) {",
             "  var propCharCount = 0;",
-            // TODO(bradfordcsmith): Fix JSC_POSSIBLE_INEXISTENT_PROPERTY warning that occurs
-            //     if the assignment to obj.e before the loop is dropped from this test case.
             "  obj.e = '';",
             "  for (obj.e in propObj) {",
             "    propCharCount += obj.e.length;",
@@ -2471,8 +2576,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testArgumentTaintedByWayOfBlockScopedLet() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "function m1(elements) {",
@@ -2489,8 +2592,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testArgumentTaintedByWayOfBlockScopedConst() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "function m1(elements) {",
@@ -2506,8 +2607,6 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
 
   @Test
   public void testArgumentTaintedByWayOfForOfScopedConst() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
     String source =
         lines(
             "function m1(elements) {",
@@ -2517,13 +2616,27 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "}",
             "m1([]);",
             "");
-    assertPureCallsMarked(source, ImmutableList.of());
+    assertNoPureCalls(source);
+  }
+
+  @Test
+  public void testArgumentTaintedByWayOfForOfScopedConstWithDestructuring() {
+    ignoreWarnings(TypeCheck.POSSIBLE_INEXISTENT_PROPERTY);
+    String source =
+        lines(
+            "function m1(elements) {",
+            "  for (const {e} of elements) {",
+            "    e.someProp = 1;",
+            "  }",
+            "}",
+            "m1([]);",
+            "");
+    assertNoPureCalls(source);
   }
 
   @Test
   public void testArgumentTaintedByWayOfNameDeclaration() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
+    ignoreWarnings(TypeCheck.POSSIBLE_INEXISTENT_PROPERTY);
     String source =
         lines(
             "function m1(obj) {",
@@ -2536,25 +2649,49 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
   }
 
   @Test
-  public void testArgumentTaintedByWayOfDestructuringNameDeclaration() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
+  public void testUnusedDestructuringNameDeclarationIsPure() {
+    ignoreWarnings(TypeCheck.POSSIBLE_INEXISTENT_PROPERTY);
     String source =
         lines(
-            "function m1(obj) {",
+            "function m1(obj) {", //
+            "  let {p} = obj;",
+            "}",
+            "m1([]);",
+            "");
+    assertPureCallsMarked(source, ImmutableList.of("m1"));
+  }
+
+  @Test
+  public void testArgumentTaintedByWayOfDestructuringNameDeclaration() {
+    ignoreWarnings(TypeCheck.POSSIBLE_INEXISTENT_PROPERTY);
+    String source =
+        lines(
+            "function m1(obj) {", //
             "  let {p} = obj;",
             "  p.someProp = 1;",
             "}",
             "m1([]);",
             "");
-    // TODO(bradfordcsmith): Fix this logic for destructuring declarations.
-    assertPureCallsMarked(source, ImmutableList.of("m1"));
+    assertNoPureCalls(source);
+  }
+
+  @Test
+  public void testArgumentTaintedByWayOfNestedDestructuringNameDeclaration() {
+    ignoreWarnings(TypeCheck.POSSIBLE_INEXISTENT_PROPERTY);
+    String source =
+        lines(
+            "function m1(obj) {", //
+            "  let {q: {p}} = obj;",
+            "  p.someProp = 1;",
+            "}",
+            "m1({});",
+            "");
+    assertNoPureCalls(source);
   }
 
   @Test
   public void testArgumentTaintedByWayOfDestructuringAssignment() {
-    // TODO(bradfordcsmith): Enable type check when it supports the languages features used here.
-    disableTypeCheck();
+    ignoreWarnings(TypeCheck.POSSIBLE_INEXISTENT_PROPERTY);
     String source =
         lines(
             "function m1(obj) {",
@@ -2564,8 +2701,65 @@ public final class PureFunctionIdentifierTest extends CompilerTestCase {
             "}",
             "m1([]);",
             "");
-    // TODO(bradfordcsmith): Fix this logic for destructuring.
-    assertPureCallsMarked(source, ImmutableList.of("m1"));
+    assertNoPureCalls(source);
+  }
+
+  @Test
+  public void testArgumentTaintedByWayOfArrayDestructuringAssignment() {
+    String source =
+        lines(
+            "function m1(obj) {",
+            "  let p;",
+            "  ([p] = obj);",
+            "  p.someProp = 1;",
+            "}",
+            "m1([]);",
+            "");
+    assertNoPureCalls(source);
+  }
+
+  @Test
+  public void testDestructuringAssignMutatingGlobalState() {
+    String source =
+        lines(
+            "var a = 0;", //
+            "function m1() {",
+            "  ([a] = []);",
+            "}",
+            "m1();");
+    assertNoPureCalls(source);
+
+    source =
+        lines(
+            "var a = 0;", //
+            "function m1() {",
+            "  ({a} = {a: 0});",
+            "}",
+            "m1();");
+    assertNoPureCalls(source);
+  }
+
+  @Test
+  public void testDefaultValueInitializers_areConsidered_whenAnalyzingDestructuring() {
+    assertNoPureCalls(
+        lines(
+            "function impure() { throw 'something'; }", //
+            "",
+            "function foo() { const {a = impure()} = {a: undefined}; }",
+            "foo();"));
+
+    assertPureCallsMarked(
+        lines(
+            "function foo() { const {a = 0} = {a: undefined}; }", //
+            "foo();"),
+        ImmutableList.of("foo"));
+
+    assertNoPureCalls(
+        lines(
+            "function impure() { throw 'something'; }", //
+            "",
+            "function foo() { const [{a = impure()}] = [{a: undefined}]; }",
+            "foo();"));
   }
 
   @Test

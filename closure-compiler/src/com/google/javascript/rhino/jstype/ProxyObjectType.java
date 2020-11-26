@@ -58,6 +58,8 @@ import java.util.Collections;
 public class ProxyObjectType extends ObjectType {
   private static final long serialVersionUID = 1L;
 
+  private static final JSTypeClass TYPE_CLASS = JSTypeClass.PROXY_OBJECT;
+
   private JSType referencedType;
   private ObjectType referencedObjType;
 
@@ -69,6 +71,13 @@ public class ProxyObjectType extends ObjectType {
                   TemplateTypeMap templateTypeMap) {
     super(registry, templateTypeMap);
     setReferencedType(checkNotNull(referencedType));
+
+    registry.getResolver().resolveIfClosed(this, TYPE_CLASS);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return TYPE_CLASS;
   }
 
   @Override
@@ -91,12 +100,18 @@ public class ProxyObjectType extends ObjectType {
   }
 
   final void setReferencedType(JSType referencedType) {
+    checkNotNull(referencedType);
     this.referencedType = referencedType;
     if (referencedType instanceof ObjectType) {
       this.referencedObjType = (ObjectType) referencedType;
     } else {
       this.referencedObjType = null;
     }
+  }
+
+  @Override
+  public final boolean loosenTypecheckingDueToForwardReferencedSupertype() {
+    return referencedType.loosenTypecheckingDueToForwardReferencedSupertype();
   }
 
   @Override
@@ -252,17 +267,6 @@ public class ProxyObjectType extends ObjectType {
   }
 
   @Override
-  public boolean isSubtype(JSType that) {
-    return referencedType.isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    return referencedType.isSubtype(that, implicitImplCache, subtypingMode);
-  }
-
-  @Override
   public final FunctionType getOwnerFunction() {
     return referencedObjType == null ? null : referencedObjType.getOwnerFunction();
   }
@@ -287,8 +291,8 @@ public class ProxyObjectType extends ObjectType {
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return referencedType.appendTo(sb, forAnnotations);
+  void appendTo(TypeStringBuilder sb) {
+    referencedType.appendTo(sb);
   }
 
   @Override
@@ -366,11 +370,6 @@ public class ProxyObjectType extends ObjectType {
   }
 
   @Override
-  public final String toDebugHashCodeString() {
-    return "{proxy:" + referencedType.toDebugHashCodeString() + "}";
-  }
-
-  @Override
   public final JSType getTypeOfThis() {
     if (referencedObjType != null) {
       return referencedObjType.getTypeOfThis();
@@ -409,10 +408,5 @@ public class ProxyObjectType extends ObjectType {
   @Override
   public TemplateTypeMap getTemplateTypeMap() {
     return referencedType.getTemplateTypeMap();
-  }
-
-  @Override
-  JSType simplifyForOptimizations() {
-    return referencedType.simplifyForOptimizations();
   }
 }

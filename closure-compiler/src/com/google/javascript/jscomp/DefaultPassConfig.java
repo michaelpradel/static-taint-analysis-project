@@ -20,34 +20,35 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.javascript.jscomp.PassFactory.createEmptyPass;
-import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES2019;
-import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES2019_MODULES;
 import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES5;
 import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES6;
-import static com.google.javascript.jscomp.parsing.parser.FeatureSet.ES_NEXT;
-import static com.google.javascript.jscomp.parsing.parser.FeatureSet.TYPESCRIPT;
-import static com.google.javascript.jscomp.parsing.parser.FeatureSet.TYPE_CHECK_SUPPORTED;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableMap;
 import com.google.javascript.jscomp.AbstractCompiler.LifeCycleStage;
 import com.google.javascript.jscomp.CompilerOptions.ExtractPrototypeMemberDeclarationsMode;
+import com.google.javascript.jscomp.CompilerOptions.InstrumentOption;
 import com.google.javascript.jscomp.CompilerOptions.PropertyCollapseLevel;
 import com.google.javascript.jscomp.CompilerOptions.Reach;
-import com.google.javascript.jscomp.CoverageInstrumentationPass.CoverageReach;
-import com.google.javascript.jscomp.CoverageInstrumentationPass.InstrumentOption;
 import com.google.javascript.jscomp.ExtractPrototypeMemberDeclarations.Pattern;
 import com.google.javascript.jscomp.NodeTraversal.Callback;
 import com.google.javascript.jscomp.ScopedAliases.InvalidModuleGetHandling;
+import com.google.javascript.jscomp.disambiguate.AmbiguateProperties;
+import com.google.javascript.jscomp.disambiguate.DisambiguateProperties;
+import com.google.javascript.jscomp.disambiguate.DisambiguateProperties2;
 import com.google.javascript.jscomp.ijs.ConvertToTypedInterface;
+import com.google.javascript.jscomp.instrumentation.CoverageInstrumentationPass;
+import com.google.javascript.jscomp.instrumentation.CoverageInstrumentationPass.CoverageReach;
 import com.google.javascript.jscomp.lint.CheckArrayWithGoogObject;
 import com.google.javascript.jscomp.lint.CheckConstantCaseNames;
+import com.google.javascript.jscomp.lint.CheckDefaultExportOfGoogModule;
 import com.google.javascript.jscomp.lint.CheckDuplicateCase;
 import com.google.javascript.jscomp.lint.CheckEmptyStatements;
 import com.google.javascript.jscomp.lint.CheckEnums;
 import com.google.javascript.jscomp.lint.CheckEs6ModuleFileStructure;
 import com.google.javascript.jscomp.lint.CheckEs6Modules;
+import com.google.javascript.jscomp.lint.CheckExtraRequires;
 import com.google.javascript.jscomp.lint.CheckInterfaces;
 import com.google.javascript.jscomp.lint.CheckJSDocStyle;
 import com.google.javascript.jscomp.lint.CheckMissingSemicolon;
@@ -60,9 +61,11 @@ import com.google.javascript.jscomp.lint.CheckProvidesSorted;
 import com.google.javascript.jscomp.lint.CheckRequiresSorted;
 import com.google.javascript.jscomp.lint.CheckUnusedLabels;
 import com.google.javascript.jscomp.lint.CheckUselessBlocks;
+import com.google.javascript.jscomp.lint.CheckVar;
 import com.google.javascript.jscomp.modules.ModuleMapCreator;
 import com.google.javascript.jscomp.parsing.ParserRunner;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
+import com.google.javascript.jscomp.serialization.ConvertTypesToColors;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
 import java.util.ArrayList;
@@ -138,9 +141,6 @@ public final class DefaultPassConfig extends PassConfig {
   protected List<PassFactory> getTranspileOnlyPasses() {
     List<PassFactory> passes = new ArrayList<>();
 
-    if (options.needsTranspilationFrom(TYPESCRIPT)) {
-      passes.add(convertEs6TypedToEs6);
-    }
     passes.add(markUntranspilableFeaturesAsRemoved);
 
     passes.add(checkVariableReferencesForTranspileOnly);
@@ -173,12 +173,16 @@ public final class DefaultPassConfig extends PassConfig {
       passes.add(dartSuperAccessorsPass);
     }
 
-    TranspilationPasses.addPreTypecheckTranspilationPasses(passes, options);
+    TranspilationPasses.addTranspilationRuntimeLibraries(passes, options);
 
     TranspilationPasses.addPostCheckTranspilationPasses(passes, options);
 
     if (options.needsTranspilationFrom(ES6)) {
-      if (options.rewritePolyfills) {
+      if (options.getRewritePolyfills()) {
+        if (options.getIsolatePolyfills()) {
+          throw new IllegalStateException(
+              "Polyfill isolation cannot be used in transpileOnly mode");
+        }
         TranspilationPasses.addRewritePolyfillPass(passes);
       }
     }
@@ -206,29 +210,7 @@ public final class DefaultPassConfig extends PassConfig {
     return passes;
   }
 
-  private void addTypeCheckerPasses(List<PassFactory> checks, CompilerOptions options) {
-    if (options.checkTypes || options.inferTypes) {
-      checks.add(resolveTypes);
-      checks.add(inferTypes);
-      if (options.checkTypes) {
-        checks.add(checkTypes);
-      } else {
-        checks.add(inferJsDocInfo);
-      }
-
-      // We assume that only clients who are going to re-compile, or do in-depth static analysis,
-      // will need the typed scope creator after the compile job.
-      if (!options.preservesDetailedSourceInfo() && !options.allowsHotswapReplaceScript()) {
-        checks.add(clearTypedScopePass);
-      }
-    }
-  }
-
   private void addModuleRewritingPasses(List<PassFactory> checks, CompilerOptions options) {
-    if (options.closurePass) {
-      checks.add(rewriteClosureImports);
-    }
-
     if (options.getLanguageIn().toFeatureSet().has(FeatureSet.Feature.MODULES)) {
       checks.add(rewriteGoogJsImports);
       TranspilationPasses.addEs6ModulePass(checks, preprocessorSymbolTableFactory);
@@ -244,6 +226,8 @@ public final class DefaultPassConfig extends PassConfig {
   protected List<PassFactory> getChecks() {
     List<PassFactory> checks = new ArrayList<>();
 
+    checks.add(syncCompilerFeatures);
+
     if (options.shouldGenerateTypedExterns()) {
       checks.add(addSyntheticScript);
       checks.add(closureGoogScopeAliasesForIjs);
@@ -256,10 +240,6 @@ public final class DefaultPassConfig extends PassConfig {
 
     // Run this pass before any pass tries to inject new runtime libraries
     checks.add(addSyntheticScript);
-
-    if (options.needsTranspilationFrom(TYPESCRIPT)) {
-      checks.add(convertEs6TypedToEs6);
-    }
 
     if (!options.checksOnly) {
       checks.add(markUntranspilableFeaturesAsRemoved);
@@ -301,17 +281,17 @@ public final class DefaultPassConfig extends PassConfig {
       checks.add(checkRequiresAndProvidesSorted);
     }
 
-    if (options.enables(DiagnosticGroups.MISSING_REQUIRE)
-        || options.enables(DiagnosticGroups.STRICT_MISSING_REQUIRE)
-        || options.enables(DiagnosticGroups.EXTRA_REQUIRE)) {
-      checks.add(checkRequires);
+    if (options.enables(DiagnosticGroups.EXTRA_REQUIRE)) {
+      checks.add(extraRequires);
+    }
+
+    if (options.enables(DiagnosticGroups.STRICTER_MISSING_REQUIRE)) {
+      checks.add(checkMissingRequires);
     }
 
     checks.add(checkVariableReferences);
 
-    if (options.declaredGlobalExternsOnWindow) {
-      checks.add(declaredGlobalExternsOnWindow);
-    }
+    checks.add(declaredGlobalExternsOnWindow);
 
     if (!options.processCommonJSModules) {
       // TODO(ChadKillingsworth): move CommonJS module rewriting after VarCheck
@@ -366,10 +346,6 @@ public final class DefaultPassConfig extends PassConfig {
       checks.add(polymerPass);
     }
 
-    if (options.closurePass && options.checkMissingGetCssNameLevel.isOn()) {
-      checks.add(closureCheckGetCssName);
-    }
-
     if (options.syntheticBlockStartMarker != null) {
       // This pass must run before the first fold constants pass.
       checks.add(createSyntheticBlocks);
@@ -397,25 +373,41 @@ public final class DefaultPassConfig extends PassConfig {
     // Passes running before this point should expect to see language features up to ES_2017.
     checks.add(createEmptyPass(PassNames.BEFORE_PRE_TYPECHECK_TRANSPILATION));
 
-    TranspilationPasses.addPreTypecheckTranspilationPasses(checks, options);
+    TranspilationPasses.addTranspilationRuntimeLibraries(checks, options);
 
-    if (options.rewritePolyfills && !options.checksOnly) {
+    if ((options.rewritePolyfills || options.getIsolatePolyfills()) && !options.checksOnly) {
       TranspilationPasses.addRewritePolyfillPass(checks);
     }
 
     checks.add(injectRuntimeLibraries);
     checks.add(createEmptyPass(PassNames.BEFORE_TYPE_CHECKING));
 
-    addTypeCheckerPasses(checks, options);
-
-    if (!options.shouldRewriteModulesBeforeTypechecking()) {
-      addModuleRewritingPasses(checks, options);
-      checks.add(closureProvidesRequires);
+    if (options.checkTypes || options.inferTypes) {
+      checks.add(inferTypes);
+      if (options.checkTypes) {
+        checks.add(checkTypes);
+      } else {
+        checks.add(inferJsDocInfo);
+      }
     }
 
-    // TODO(b/124915436): Remove this pass completely after cleaning up the codebase.
-    if (!options.allowsHotswapReplaceScript()) {
-      checks.add(inlineTypeAliases);
+    // We assume that only clients who are going to re-compile, or do in-depth static analysis,
+    // will need the typed scope creator after the compile job.
+    if (!options.preservesDetailedSourceInfo() && !options.allowsHotswapReplaceScript()) {
+      checks.add(clearTypedScopeCreatorPass);
+    }
+
+    if (options.shouldRewriteModulesAfterTypechecking()) {
+      addModuleRewritingPasses(checks, options);
+      if (options.closurePass) {
+        checks.add(closureProvidesRequires);
+      }
+    }
+
+    // We assume that only clients who are going to re-compile, or do in-depth static analysis,
+    // will need the typed scope creator after the compile job.
+    if (!options.preservesDetailedSourceInfo() && !options.allowsHotswapReplaceScript()) {
+      checks.add(clearTopTypedScopePass);
     }
 
     // CheckSuspiciousCode requires type information, so must run after the type checker.
@@ -489,13 +481,13 @@ public final class DefaultPassConfig extends PassConfig {
 
     checks.add(createEmptyPass(PassNames.AFTER_STANDARD_CHECKS));
 
-    checks.add(removeSyntheticScript);
-
-    if (!options.checksOnly && options.j2clPassMode.shouldAddJ2clPasses()) {
-      checks.add(j2clPass);
-    }
-
-    if (!options.checksOnly) {
+    if (options.checksOnly) {
+      checks.add(removeSyntheticScript);
+    } else if (!options.checksOnly) {
+      checks.add(mergeSyntheticScript);
+      if (options.j2clPassMode.shouldAddJ2clPasses()) {
+        checks.add(j2clPass);
+      }
       // At this point all checks have been done.
       if (options.exportTestFunctions) {
         checks.add(exportTestFunctions);
@@ -503,15 +495,6 @@ public final class DefaultPassConfig extends PassConfig {
 
       // There's no need to complete transpilation if we're only running checks.
       TranspilationPasses.addPostCheckTranspilationPasses(checks, options);
-
-      if (options.needsTranspilationFrom(ES6)) {
-        // This pass used to be necessary to make the typechecker happy with class-side inheritance.
-        // It's not necessary for typechecking now that class transpilation is post-typechecking,
-        // but it turned out to be necessary to avoid CollapseProperties breaking static inheritance
-        // TODO(b/116054203): try to only run this pass when property collapsing is enabled during
-        // the optimizations. Even better, find a way to get rid of this pass completely.
-        checks.add(convertStaticInheritance);
-      }
     }
 
     assertAllOneTimePasses(checks);
@@ -531,6 +514,11 @@ public final class DefaultPassConfig extends PassConfig {
     }
 
     passes.add(removeWeakSources);
+
+    // TODO(b/124915436): Remove this pass completely after cleaning up the codebase.
+    if (!options.allowsHotswapReplaceScript()) {
+      passes.add(inlineTypeAliases);
+    }
 
     passes.add(garbageCollectChecks);
 
@@ -570,7 +558,7 @@ public final class DefaultPassConfig extends PassConfig {
       passes.add(j2clUtilGetDefineRewriterPass);
     }
 
-    if (options.instrumentForCoverage) {
+    if (options.getInstrumentForCoverageOption() != InstrumentOption.NONE) {
       passes.add(instrumentForCodeCoverage);
     }
 
@@ -599,18 +587,14 @@ public final class DefaultPassConfig extends PassConfig {
       passes.add(j2clAssertRemovalPass);
     }
 
-    // Property disambiguation should only run once and needs to be done
-    // soon after type checking, both so that it can make use of type
-    // information and so that other passes can take advantage of the renamed
-    // properties.
-    if (options.disambiguatePrivateProperties) {
-      passes.add(disambiguatePrivateProperties);
-    }
-
     assertAllOneTimePasses(passes);
 
     // Inline aliases so that following optimizations don't have to understand alias chains.
     if (options.getPropertyCollapseLevel() == PropertyCollapseLevel.ALL) {
+      if (options.needsTranspilationFrom(ES6)) {
+        // This helps AggressiveInlineAliases / CollapseProperties with static inheritance
+        passes.add(convertStaticInheritance);
+      }
       passes.add(aggressiveInlineAliases);
     }
 
@@ -632,16 +616,16 @@ public final class DefaultPassConfig extends PassConfig {
       passes.add(inferConsts);
     }
 
-    // TODO(mlourenco): Ideally this would be in getChecks() instead of getOptimizations(). But
-    // for that it needs to understand constant properties as well. See b/31301233#10.
-    // Needs to happen after inferConsts and collapseProperties. Detects whether invocations of
-    // the method goog.string.Const.from are done with an argument which is a string literal.
+    // Detects whether invocations of the method goog.string.Const.from are done with an argument
+    // which is a string literal. Needs to happen after inferConsts and collapseProperties.
+    // TODO(b/160616664): this should be in getChecks() instead of getOptimizations(). But
+    // for that the pass needs to understand constant properties as well. See b/31301233#comment10
     passes.add(checkConstParams);
 
     // Running RemoveUnusedCode before disambiguate properties allows disambiguate properties to be
     // more effective if code that would prevent disambiguation can be removed.
     // TODO(b/66971163): Rename options since we're not actually using smartNameRemoval here now.
-    if (options.extraSmartNameRemoval && options.smartNameRemoval) {
+    if (options.smartNameRemoval) {
 
       // These passes remove code that is dead because of define flags.
       // If the dead code is weakly typed, running these passes before property
@@ -660,7 +644,19 @@ public final class DefaultPassConfig extends PassConfig {
     // information and so that other passes can take advantage of the renamed
     // properties.
     if (options.shouldDisambiguateProperties() && options.isTypecheckingEnabled()) {
-      passes.add(disambiguateProperties);
+      if (options.shouldUseGraphBasedDisambiguator()) {
+        passes.add(disambiguateProperties2);
+      } else {
+        passes.add(disambiguateProperties);
+      }
+    }
+
+    if (options.checkTypes || options.inferTypes) {
+      passes.add(typesToColors);
+    }
+
+    if (!options.shouldUnsafelyPreserveTypesForDebugging()) {
+      passes.add(removeTypes);
     }
 
     if (options.computeFunctionSideEffects) {
@@ -723,6 +719,14 @@ public final class DefaultPassConfig extends PassConfig {
       passes.add(flowSensitiveInlineVariables);
     }
 
+    if (options.checkTypes || options.inferTypes) {
+      passes.add(typesToColors);
+    }
+
+    if (!options.shouldUnsafelyPreserveTypesForDebugging()) {
+      passes.add(removeTypes);
+    }
+
     passes.addAll(getMainOptimizationLoop());
     passes.add(createEmptyPass(PassNames.AFTER_MAIN_OPTIMIZATIONS));
 
@@ -755,20 +759,23 @@ public final class DefaultPassConfig extends PassConfig {
       }
     }
 
+    // Isolate injected polyfills from the global scope. Runs late in the optimization loop
+    // to take advantage of property renaming & RemoveUnusedCode, as this pass will increase code
+    // size by wrapping all potential polyfill usages.
+    if (options.getIsolatePolyfills()) {
+      passes.add(isolatePolyfills);
+    }
+
     if (options.collapseAnonymousFunctions) {
       passes.add(collapseAnonymousFunctions);
     }
 
     // Move functions before extracting prototype member declarations.
-    if (options.moveFunctionDeclarations
-        // renamePrefixNamescape relies on moveFunctionDeclarations
+    if (options.rewriteGlobalDeclarationsForTryCatchWrapping
+        // renamePrefixNamescape relies on rewriteGlobalDeclarationsForTryCatchWrapping
         // to preserve semantics.
         || options.renamePrefixNamespace != null) {
-      passes.add(moveFunctionDeclarations);
-    }
-
-    if (options.anonymousFunctionNaming == AnonymousFunctionNamingPolicy.MAPPED) {
-      passes.add(nameMappedAnonymousFunctions);
+      passes.add(rewriteGlobalDeclarationsForTryCatchWrapping);
     }
 
     // The mapped name anonymous function pass makes use of information that
@@ -854,10 +861,6 @@ public final class DefaultPassConfig extends PassConfig {
 
     if (options.foldConstants) {
       passes.add(latePeepholeOptimizations);
-    }
-
-    if (options.anonymousFunctionNaming == AnonymousFunctionNamingPolicy.UNMAPPED) {
-      passes.add(nameUnmappedAnonymousFunctions);
     }
 
     // If side-effects were protected, remove the protection now.
@@ -969,6 +972,16 @@ public final class DefaultPassConfig extends PassConfig {
         || options.rewritePolyfills;
   }
 
+  /** Set feature set of compiler to only features used in the externs and sources */
+  private final PassFactory syncCompilerFeatures =
+      PassFactory.builder()
+          .setName("syncCompilerFeatures")
+          .setInternalFactory(SyncCompilerFeatures::new)
+          // This pass just records which features actually appear in the input code.
+          // It needs to work no matter what those features are.
+          .setFeatureSet(FeatureSet.all())
+          .build();
+
   private final PassFactory checkSideEffects =
       PassFactory.builderForHotSwap()
           .setName("checkSideEffects")
@@ -978,7 +991,7 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler,
                       options.checkSuspiciousCode,
                       options.shouldProtectHiddenSideEffects()))
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Removes the "protector" functions that were added by CheckSideEffects. */
@@ -1011,7 +1024,7 @@ public final class DefaultPassConfig extends PassConfig {
 
                 return combineChecks(compiler, sharedCallbacks);
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Verify that all the passes are one-time passes. */
@@ -1131,9 +1144,9 @@ public final class DefaultPassConfig extends PassConfig {
 
     assertPassOrder(
         checks,
-        checkClosureImports,
-        rewriteClosureImports,
-        "Closure imports must be checked before they are rewritten.");
+        gatherModuleMetadataPass,
+        checkMissingRequires,
+        "Need to gather module information before checking for missing requires.");
 
     assertPassOrder(
         checks,
@@ -1155,24 +1168,36 @@ public final class DefaultPassConfig extends PassConfig {
         j2clUtilGetDefineRewriterPass,
         "J2CL define re-writing should be done after processDefines since it relies on "
             + "collectDefines which has side effects.");
+
+    assertPassOrder(
+        optimizations,
+        removeUnusedCode,
+        isolatePolyfills,
+        "Polyfill isolation should be done after RemovedUnusedCode. Otherwise unused polyfill"
+            + " removal will not find any polyfill usages and will delete all polyfills.");
   }
 
-  /** Checks that all constructed classes are goog.require()d. */
-  private final PassFactory checkRequires =
+  /** Checks that all goog.require()s are used. */
+  private final PassFactory extraRequires =
       PassFactory.builderForHotSwap()
-          .setName("checkMissingAndExtraRequires")
-          .setFeatureSet(ES_NEXT)
+          .setName("checkExtraRequires")
+          .setFeatureSetForChecks()
+          .setInternalFactory(CheckExtraRequires::new)
+          .build();
+
+  private final PassFactory checkMissingRequires =
+      PassFactory.builder()
+          .setName("checkMissingRequires")
           .setInternalFactory(
-              (compiler) ->
-                  new CheckMissingAndExtraRequires(
-                      compiler, CheckMissingAndExtraRequires.Mode.FULL_COMPILE))
+              (compiler) -> new CheckMissingRequires(compiler, compiler.getModuleMetadataMap()))
+          .setFeatureSetForChecks()
           .build();
 
   /** Makes sure @constructor is paired with goog.provides(). */
   private final PassFactory checkProvides =
       PassFactory.builderForHotSwap()
           .setName("checkProvides")
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .setInternalFactory(CheckProvides::new)
           .build();
 
@@ -1185,7 +1210,7 @@ public final class DefaultPassConfig extends PassConfig {
   private final PassFactory checkJsDocAndEs6Modules =
       PassFactory.builderForHotSwap()
           .setName("checkJsDocAndEs6Modules")
-          .setFeatureSet(FeatureSet.latest())
+          .setFeatureSetForChecks()
           .setInternalFactory(
               (compiler) ->
                   combineChecks(
@@ -1219,14 +1244,14 @@ public final class DefaultPassConfig extends PassConfig {
                   return new ErrorPass(compiler, GENERATE_EXPORTS_ERROR);
                 }
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory generateIjs =
       PassFactory.builder()
           .setName("generateIjs")
           .setInternalFactory(ConvertToTypedInterface::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Generates exports for functions associated with JsUnit. */
@@ -1245,7 +1270,7 @@ public final class DefaultPassConfig extends PassConfig {
                   return new ErrorPass(compiler, GENERATE_EXPORTS_ERROR);
                 }
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Raw exports processing pass. */
@@ -1264,10 +1289,7 @@ public final class DefaultPassConfig extends PassConfig {
                   }
                 };
               })
-
-          // Should be FeatureSet.latest() since it's a trivial pass, but must match "normalize"
-          // TODO(johnlenz): Update this and normalize to latest()
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSet(FeatureSet.latest())
           .build();
 
   /** Closure pre-processing pass. */
@@ -1294,7 +1316,7 @@ public final class DefaultPassConfig extends PassConfig {
                   }
                 };
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Closure provide/require rewriting pass. */
@@ -1304,13 +1326,16 @@ public final class DefaultPassConfig extends PassConfig {
           .setInternalFactory(
               (compiler) -> {
                 preprocessorSymbolTableFactory.maybeInitialize(compiler);
+                TypedScope globalTypedScope =
+                    compiler.getOptions().allowsHotswapReplaceScript() ? null : this.getTopScope();
                 return new ProcessClosureProvidesAndRequires(
                     compiler,
                     preprocessorSymbolTableFactory.getInstanceOrNull(),
                     options.brokenClosureRequiresLevel,
-                    options.shouldPreservesGoogProvidesAndRequires());
+                    options.shouldPreservesGoogProvidesAndRequires(),
+                    globalTypedScope);
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Process AngularJS-specific annotations. */
@@ -1318,7 +1343,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builderForHotSwap()
           .setName(PassNames.ANGULAR_PASS)
           .setInternalFactory(AngularPass::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /**
@@ -1339,7 +1364,7 @@ public final class DefaultPassConfig extends PassConfig {
                       JsMessage.Style.CLOSURE,
                       /* if we can't find a translation, don't worry about it. */
                       false))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory replaceMessagesForChrome =
@@ -1354,7 +1379,7 @@ public final class DefaultPassConfig extends PassConfig {
                       true,
                       /* allow messages with goog.getMsg */
                       JsMessage.Style.CLOSURE))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Applies aliases and inlines goog.scope. */
@@ -1362,7 +1387,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builderForHotSwap()
           .setName("closureGoogScopeAliasesForIjs")
           .setInternalFactory((compiler) -> ScopedAliases.builder(compiler).build())
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /**
@@ -1382,22 +1407,14 @@ public final class DefaultPassConfig extends PassConfig {
                     .setInvalidModuleGetHandling(InvalidModuleGetHandling.DELETE)
                     .build();
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory injectRuntimeLibraries =
       PassFactory.builder()
           .setName("InjectRuntimeLibraries")
           .setInternalFactory(InjectRuntimeLibraries::new)
-          .setFeatureSet(ES_NEXT)
-          .build();
-
-  /** Desugars ES6_TYPED features into ES6 code. */
-  final PassFactory convertEs6TypedToEs6 =
-      PassFactory.builderForHotSwap()
-          .setName("convertEs6Typed")
-          .setInternalFactory(Es6TypedToEs6Converter::new)
-          .setFeatureSet(TYPESCRIPT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory markUntranspilableFeaturesAsRemoved =
@@ -1406,21 +1423,21 @@ public final class DefaultPassConfig extends PassConfig {
           .setInternalFactory(
               (compiler) ->
                   new MarkUntranspilableFeaturesAsRemoved(compiler, options.getOutputFeatureSet()))
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory convertStaticInheritance =
       PassFactory.builder()
           .setName("Es6StaticInheritance")
           .setInternalFactory(Es6ToEs3ClassSideInheritance::new)
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory inlineTypeAliases =
       PassFactory.builder()
           .setName(PassNames.INLINE_TYPE_ALIASES)
           .setInternalFactory(InlineAliases::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Inlines type aliases if they are explicitly or effectively const. */
@@ -1428,7 +1445,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("aggressiveInlineAliases")
           .setInternalFactory(AggressiveInlineAliases::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory removeWeakSources =
@@ -1442,14 +1459,14 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.DECLARED_GLOBAL_EXTERNS_ON_WINDOW)
           .setInternalFactory(DeclaredGlobalExternsOnWindow::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory checkTypeImportCodeReferences =
       PassFactory.builder()
           .setName("checkTypeImportCodeReferences")
           .setInternalFactory(CheckTypeImportCodeReferences::new)
-          .setFeatureSet(FeatureSet.latest())
+          .setFeatureSetForChecks()
           .build();
 
   /** Rewrites goog.defineClass */
@@ -1457,7 +1474,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builderForHotSwap()
           .setName(PassNames.CLOSURE_REWRITE_CLASS)
           .setInternalFactory(ClosureRewriteClass::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks of correct usage of goog.module */
@@ -1466,7 +1483,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName("closureCheckModule")
           .setInternalFactory(
               (compiler) -> new ClosureCheckModule(compiler, compiler.getModuleMetadataMap()))
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Rewrites goog.module */
@@ -1477,12 +1494,15 @@ public final class DefaultPassConfig extends PassConfig {
               (compiler) -> {
                 preprocessorSymbolTableFactory.maybeInitialize(compiler);
                 maybeInitializeModuleRewriteState();
+                TypedScope globalTypedScope =
+                    compiler.getOptions().allowsHotswapReplaceScript() ? null : this.getTopScope();
                 return new ClosureRewriteModule(
                     compiler,
                     preprocessorSymbolTableFactory.getInstanceOrNull(),
-                    moduleRewriteState);
+                    moduleRewriteState,
+                    globalTypedScope);
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks goog.require, goog.forwardDeclare, goog.requireType, and goog.module.get calls */
@@ -1491,22 +1511,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName("checkGoogRequires")
           .setInternalFactory(
               (compiler) -> new CheckClosureImports(compiler, compiler.getModuleMetadataMap()))
-          .setFeatureSet(ES_NEXT)
-          .build();
-
-  /** Rewrites goog.require, goog.forwardDeclare, goog.requireType, and goog.module.get calls */
-  private final PassFactory rewriteClosureImports =
-      PassFactory.builderForHotSwap()
-          .setName("rewriteClosureImports")
-          .setInternalFactory(
-              (compiler) ->
-                  new RewriteClosureImports(
-                      compiler,
-                      compiler.getModuleMetadataMap(),
-                      preprocessorSymbolTableFactory.getInstanceOrNull(),
-                      // TODO(johnplaisted): Expand the Set of modules to rewrite in.
-                      ImmutableSet.of()))
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Rewrite imports for Closure Library's goog.js file to global goog references. */
@@ -1519,20 +1524,7 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler,
                       RewriteGoogJsImports.Mode.LINT_AND_REWRITE,
                       compiler.getModuleMap()))
-          .setFeatureSet(ES_NEXT)
-          .build();
-
-  /** Checks that CSS class names are wrapped in goog.getCssName */
-  private final PassFactory closureCheckGetCssName =
-      PassFactory.builder()
-          .setName("closureCheckGetCssName")
-          .setInternalFactory(
-              (compiler) ->
-                  new CheckMissingGetCssName(
-                      compiler,
-                      options.checkMissingGetCssNameLevel,
-                      options.checkMissingGetCssNameBlacklist))
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /**
@@ -1552,12 +1544,12 @@ public final class DefaultPassConfig extends PassConfig {
                         newCssNames = new HashMap<>();
                       }
                       ReplaceCssNames pass =
-                          new ReplaceCssNames(compiler, newCssNames, options.cssRenamingWhitelist);
+                          new ReplaceCssNames(compiler, newCssNames, options.cssRenamingSkiplist);
                       pass.process(externs, jsRoot);
                       compiler.setCssNames(newCssNames);
                     }
                   })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /**
@@ -1570,7 +1562,7 @@ public final class DefaultPassConfig extends PassConfig {
               (compiler) ->
                   new CreateSyntheticBlocks(
                       compiler, options.syntheticBlockStartMarker, options.syntheticBlockEndMarker))
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory earlyPeepholeOptimizations =
@@ -1589,7 +1581,7 @@ public final class DefaultPassConfig extends PassConfig {
                 return new PeepholeOptimizationsPass(
                     compiler, "earlyPeepholeOptimizations", peepholeOptimizations);
               })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory earlyInlineVariables =
@@ -1607,7 +1599,7 @@ public final class DefaultPassConfig extends PassConfig {
                 }
                 return new InlineVariables(compiler, mode, true);
               })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Various peephole optimizations. */
@@ -1638,7 +1630,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setInternalFactory(
               (compiler) ->
                   createPeepholeOptimizationsPass(compiler, PassNames.PEEPHOLE_OPTIMIZATIONS))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Various peephole optimizations. */
@@ -1648,7 +1640,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setInternalFactory(
               (compiler) ->
                   createPeepholeOptimizationsPass(compiler, PassNames.PEEPHOLE_OPTIMIZATIONS))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Same as peepholeOptimizations but aggressively merges code together */
@@ -1662,7 +1654,7 @@ public final class DefaultPassConfig extends PassConfig {
                 return new PeepholeOptimizationsPass(
                     compiler,
                     "latePeepholeOptimizations",
-                    new StatementFusion(options.aggressiveFusion),
+                    new StatementFusion(),
                     new PeepholeRemoveDeadCode(),
                     new PeepholeMinimizeConditions(late),
                     new PeepholeSubstituteAlternateSyntax(late),
@@ -1670,7 +1662,7 @@ public final class DefaultPassConfig extends PassConfig {
                     new PeepholeFoldConstants(late, useTypesForOptimization),
                     new PeepholeReorderConstantExpression());
               })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Checks that all variables are defined. */
@@ -1678,7 +1670,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builderForHotSwap()
           .setName(PassNames.CHECK_VARS)
           .setInternalFactory(VarCheck::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Infers constants. */
@@ -1686,7 +1678,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.INFER_CONSTS)
           .setInternalFactory(InferConsts::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks for RegExp references. */
@@ -1705,7 +1697,7 @@ public final class DefaultPassConfig extends PassConfig {
                   }
                 };
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks that references to variables look reasonable. */
@@ -1713,7 +1705,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builderForHotSwap()
           .setName(PassNames.CHECK_VARIABLE_REFERENCES)
           .setInternalFactory((compiler) -> new VariableReferenceCheck(compiler, true))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks that references to variables look reasonable. */
@@ -1721,31 +1713,30 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builderForHotSwap()
           .setName(PassNames.CHECK_VARIABLE_REFERENCES)
           .setInternalFactory(VariableReferenceCheck::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
-  /** Checks that references to variables look reasonable. */
   private final PassFactory checkSuper =
       PassFactory.builderForHotSwap()
           .setName("checkSuper")
           .setInternalFactory(CheckSuper::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
-  /** Creates a typed scope and adds types to the type registry. */
-  final PassFactory resolveTypes =
-      PassFactory.builderForHotSwap()
-          .setName(PassNames.RESOLVE_TYPES)
-          .setInternalFactory(GlobalTypeResolver::new)
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
-          .build();
-
-  /** Clears the typed scope when we're done. */
-  private final PassFactory clearTypedScopePass =
+  /** Clears the typed scope creator and all local typed scopes. */
+  private final PassFactory clearTypedScopeCreatorPass =
       PassFactory.builder()
-          .setName("clearTypedScopePass")
-          .setInternalFactory((compiler) -> new ClearTypedScope())
-          .setFeatureSet(FeatureSet.latest())
+          .setName("clearTypedScopeCreatorPass")
+          .setInternalFactory((compiler) -> new ClearTypedScopeCreator())
+          .setFeatureSetForChecks()
+          .build();
+
+  /** Clears the top typed scope when we're done with it. */
+  private final PassFactory clearTopTypedScopePass =
+      PassFactory.builder()
+          .setName("clearTopTypedScopePass")
+          .setInternalFactory((compiler) -> new ClearTopTypedScope())
+          .setFeatureSetForChecks()
           .build();
 
   /** Runs type inference. */
@@ -1756,19 +1747,30 @@ public final class DefaultPassConfig extends PassConfig {
               (compiler) ->
                   new HotSwapCompilerPass() {
                     @Override
-                    public void process(Node externs, Node root) {
-                      checkNotNull(topScope);
-                      checkNotNull(getTypedScopeCreator());
+                    public void process(Node unused, Node srcRoot) {
+                      Node globalRoot = srcRoot.getParent();
+                      compiler.setTypeCheckingHasRun(true);
 
-                      makeTypeInference(compiler).process(externs, root);
+                      DefaultPassConfig.this.topScope =
+                          this.createInference().inferAllScopes(globalRoot);
                     }
 
                     @Override
                     public void hotSwapScript(Node scriptRoot, Node originalRoot) {
-                      makeTypeInference(compiler).inferAllScopes(scriptRoot);
+                      this.createInference()
+                          .reuseTopScope(getTopScope())
+                          .inferAllScopes(scriptRoot);
+                    }
+
+                    /** Create a type inference pass. */
+                    private TypeInferencePass createInference() {
+                      return new TypeInferencePass(
+                          compiler,
+                          compiler.getReverseAbstractInterpreter(),
+                          getTypedScopeCreator(compiler));
                     }
                   })
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory inferJsDocInfo =
@@ -1782,15 +1784,15 @@ public final class DefaultPassConfig extends PassConfig {
                       checkNotNull(topScope);
                       checkNotNull(getTypedScopeCreator());
 
-                      makeInferJsDocInfo(compiler).process(externs, root);
+                      new InferJSDocInfo(compiler).process(externs, root);
                     }
 
                     @Override
                     public void hotSwapScript(Node scriptRoot, Node originalRoot) {
-                      makeInferJsDocInfo(compiler).hotSwapScript(scriptRoot, originalRoot);
+                      new InferJSDocInfo(compiler).hotSwapScript(scriptRoot, originalRoot);
                     }
                   })
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks type usage */
@@ -1815,7 +1817,7 @@ public final class DefaultPassConfig extends PassConfig {
                       makeTypeCheck(compiler).check(scriptRoot, false);
                     }
                   })
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
           .build();
 
   /**
@@ -1836,7 +1838,7 @@ public final class DefaultPassConfig extends PassConfig {
                 }
                 return combineChecks(compiler, callbacks);
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks access controls. Depends on type-inference. */
@@ -1846,9 +1848,15 @@ public final class DefaultPassConfig extends PassConfig {
           .setInternalFactory(
               (compiler) ->
                   new CheckAccessControls(compiler, options.enforceAccessControlCodingConventions))
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
           .build();
 
+  /**
+   * Runs the single-file linter passes
+   *
+   * <p>These is NOT the configuration for the standalone Linter binary. New linter passes must also
+   * be added to {@link LintPassConfig} as well as this list.
+   */
   private final PassFactory lintChecks =
       PassFactory.builderForHotSwap()
           .setName(PassNames.LINT_CHECKS)
@@ -1857,6 +1865,7 @@ public final class DefaultPassConfig extends PassConfig {
                 ImmutableList.Builder<Callback> callbacks =
                     ImmutableList.<Callback>builder()
                         .add(new CheckConstantCaseNames(compiler))
+                        .add(new CheckDefaultExportOfGoogModule(compiler))
                         .add(new CheckEmptyStatements(compiler))
                         .add(new CheckEnums(compiler))
                         .add(new CheckEs6ModuleFileStructure(compiler))
@@ -1869,10 +1878,11 @@ public final class DefaultPassConfig extends PassConfig {
                         .add(new CheckPrimitiveAsObject(compiler))
                         .add(new CheckPrototypeProperties(compiler))
                         .add(new CheckUnusedLabels(compiler))
-                        .add(new CheckUselessBlocks(compiler));
+                        .add(new CheckUselessBlocks(compiler))
+                        .add(new CheckVar(compiler));
                 return combineChecks(compiler, callbacks.build());
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory analyzerChecks =
@@ -1896,21 +1906,20 @@ public final class DefaultPassConfig extends PassConfig {
                 }
                 return combineChecks(compiler, callbacks.build());
               })
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory checkRequiresAndProvidesSorted =
       PassFactory.builderForHotSwap()
           .setName("checkRequiresAndProvidesSorted")
           .setInternalFactory(
-              (compiler) -> {
-                return combineChecks(
-                    compiler,
-                    ImmutableList.of(
-                        new CheckProvidesSorted(CheckProvidesSorted.Mode.COLLECT_AND_REPORT),
-                        new CheckRequiresSorted(CheckRequiresSorted.Mode.COLLECT_AND_REPORT)));
-              })
-          .setFeatureSet(ES_NEXT)
+              (compiler) ->
+                  combineChecks(
+                      compiler,
+                      ImmutableList.of(
+                          new CheckProvidesSorted(CheckProvidesSorted.Mode.COLLECT_AND_REPORT),
+                          new CheckRequiresSorted(CheckRequiresSorted.Mode.COLLECT_AND_REPORT))))
+          .setFeatureSetForChecks()
           .build();
 
   /** Executes the given callbacks with a {@link CombinedCompilerPass}. */
@@ -1920,34 +1929,19 @@ public final class DefaultPassConfig extends PassConfig {
     return new CombinedCompilerPass(compiler, callbacks);
   }
 
-  /** A compiler pass that resolves types in the global scope. */
-  class GlobalTypeResolver implements HotSwapCompilerPass {
-    private AbstractCompiler compiler;
-
-    GlobalTypeResolver(AbstractCompiler compiler) {
-      this.compiler = compiler;
-    }
-
+  /** A compiler pass that clears typed scope creator (and non-global scopes cached there) */
+  class ClearTypedScopeCreator implements CompilerPass {
     @Override
     public void process(Node externs, Node root) {
-      this.compiler.setTypeCheckingHasRun(true);
-      if (topScope == null) {
-        regenerateGlobalTypedScope(compiler, root.getParent());
-      } else {
-        compiler.getTypeRegistry().resolveTypes();
-      }
-    }
-    @Override
-    public void hotSwapScript(Node scriptRoot, Node originalRoot) {
-      patchGlobalTypedScope(compiler, scriptRoot);
+      clearTypedScopeCreator();
     }
   }
 
   /** A compiler pass that clears the global scope. */
-  class ClearTypedScope implements CompilerPass {
+  class ClearTopTypedScope implements CompilerPass {
     @Override
     public void process(Node externs, Node root) {
-      clearTypedScope();
+      clearTopTypedScope();
     }
   }
 
@@ -1969,15 +1963,20 @@ public final class DefaultPassConfig extends PassConfig {
                           .process(externs, jsRoot);
                     }
                   })
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks that the code is ES5 strict compliant. */
   private final PassFactory checkStrictMode =
       PassFactory.builder()
           .setName("checkStrictMode")
-          .setInternalFactory(StrictModeCheck::new)
-          .setFeatureSet(ES_NEXT)
+          .setInternalFactory(
+              (compiler) -> {
+                CheckLevel defaultLevel =
+                    options.expectStrictModeInput() ? CheckLevel.ERROR : CheckLevel.OFF;
+                return new StrictModeCheck(compiler, defaultLevel);
+              })
+          .setFeatureSetForChecks()
           .build();
 
   /** Process goog.tweak.getTweak() calls. */
@@ -1996,7 +1995,7 @@ public final class DefaultPassConfig extends PassConfig {
                           .process(externs, jsRoot);
                     }
                   })
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
           .build();
 
   /** Override @define-annotated constants. */
@@ -2012,7 +2011,7 @@ public final class DefaultPassConfig extends PassConfig {
                       .checksOnly(options.checksOnly)
                       .injectNamespace(() -> namespaceForChecks)
                       .build())
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
           .build();
 
   /**
@@ -2044,7 +2043,7 @@ public final class DefaultPassConfig extends PassConfig {
           .
           // TODO(johnlenz): StripCode may be fooled by some newer features, like destructuring,
           // an).build();
-          setFeatureSet(ES2019_MODULES)
+          setFeatureSetForOptimizations()
           .build();
 
   /** Release references to data that is only needed during checks. */
@@ -2073,8 +2072,9 @@ public final class DefaultPassConfig extends PassConfig {
   private final PassFactory checkConsts =
       PassFactory.builder()
           .setName("checkConsts")
-          .setInternalFactory(ConstCheck::new)
-          .setFeatureSet(ES_NEXT)
+          .setInternalFactory(
+              (compiler) -> new ConstCheck(compiler, compiler.getModuleMetadataMap()))
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks that the arguments are constants */
@@ -2082,7 +2082,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.CHECK_CONST_PARAMS)
           .setInternalFactory(ConstParamCheck::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForChecks()
           .build();
 
   /** Inserts run-time type assertions for debugging. */
@@ -2091,6 +2091,8 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.RUNTIME_TYPE_CHECK)
           .setInternalFactory(
               (compiler) -> new RuntimeTypeCheck(compiler, options.runtimeTypeCheckLogFunction))
+          // TODO(bradfordcsmith): Drop support for this pass.
+          // It's never been updated to handle ES6+ code, because it isn't worth the effort.
           .setFeatureSet(ES5)
           .build();
 
@@ -2114,7 +2116,7 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler.setIdGeneratorMap(pass.getSerializedIdMappings());
                     }
                   })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForChecks()
           .build();
 
   /** Replace strings. */
@@ -2137,7 +2139,7 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler.setStringMap(pass.getStringMap());
                     }
                   })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Optimizes the "arguments" array. */
@@ -2145,7 +2147,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.OPTIMIZE_ARGUMENTS_ARRAY)
           .setInternalFactory(OptimizeArgumentsArray::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Remove variables set to goog.abstractMethod. */
@@ -2156,7 +2158,7 @@ public final class DefaultPassConfig extends PassConfig {
               (compiler) ->
                   new ClosureCodeRemoval(
                       compiler, options.removeAbstractMethods, options.removeClosureAsserts))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Special case optimizations for closure functions. */
@@ -2169,7 +2171,7 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler,
                       compiler.getOptions().propertyRenaming == PropertyRenamingPolicy.ALL_UNQUOTED,
                       compiler.getOptions().getOutputFeatureSet().contains(ES6)))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Puts global symbols into a single object. */
@@ -2182,7 +2184,7 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler,
                       options.renamePrefixNamespace,
                       options.renamePrefixNamespaceAssumeCrossChunkNames))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Collapses names in the global scope. */
@@ -2191,7 +2193,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.COLLAPSE_PROPERTIES)
           .setInternalFactory(
               (compiler) -> new CollapseProperties(compiler, options.getPropertyCollapseLevel()))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Rewrite properties as variables. */
@@ -2201,15 +2203,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setRunInFixedPointLoop(true)
           .setInternalFactory(
               (compiler) -> new InlineObjectLiterals(compiler, compiler.getUniqueNameIdSupplier()))
-          .setFeatureSet(ES2019_MODULES)
-          .build();
-
-  /** Disambiguate property names based on the coding convention. */
-  private final PassFactory disambiguatePrivateProperties =
-      PassFactory.builder()
-          .setName(PassNames.DISAMBIGUATE_PRIVATE_PROPERTIES)
-          .setInternalFactory(DisambiguatePrivateProperties::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Disambiguate property names based on type information. */
@@ -2219,7 +2213,18 @@ public final class DefaultPassConfig extends PassConfig {
           .setInternalFactory(
               (compiler) ->
                   new DisambiguateProperties(compiler, options.propertyInvalidationErrors))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
+          .build();
+
+  /** Disambiguate property names based on type information. */
+  private final PassFactory disambiguateProperties2 =
+      PassFactory.builder()
+          .setName(PassNames.DISAMBIGUATE_PROPERTIES)
+          .setInternalFactory(
+              (compiler) ->
+                  new DisambiguateProperties2(
+                      compiler, ImmutableMap.copyOf(options.propertyInvalidationErrors)))
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Rewrite instance methods as static methods, to make them easier to inline. */
@@ -2227,14 +2232,13 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.DEVIRTUALIZE_METHODS)
           .setInternalFactory(
-              (compiler) -> {
-                return OptimizeCalls.builder()
-                    .setCompiler(compiler)
-                    .setConsiderExterns(false)
-                    .addPass(new DevirtualizeMethods(compiler))
-                    .build();
-              })
-          .setFeatureSet(ES2019_MODULES)
+              (compiler) ->
+                  OptimizeCalls.builder()
+                      .setCompiler(compiler)
+                      .setConsiderExterns(false)
+                      .addPass(new DevirtualizeMethods(compiler))
+                      .build())
+          .setFeatureSetForOptimizations()
           .build();
 
   /**
@@ -2246,17 +2250,16 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.OPTIMIZE_CALLS)
           .setRunInFixedPointLoop(true)
           .setInternalFactory(
-              (compiler) -> {
-                return OptimizeCalls.builder()
-                    .setCompiler(compiler)
-                    .setConsiderExterns(false)
-                    // Remove unused return values.
-                    .addPass(new OptimizeReturns(compiler))
-                    // Remove all parameters that are constants or unused.
-                    .addPass(new OptimizeParameters(compiler))
-                    .build();
-              })
-          .setFeatureSet(ES2019_MODULES)
+              (compiler) ->
+                  OptimizeCalls.builder()
+                      .setCompiler(compiler)
+                      .setConsiderExterns(false)
+                      // Remove unused return values.
+                      .addPass(new OptimizeReturns(compiler))
+                      // Remove all parameters that are constants or unused.
+                      .addPass(new OptimizeParameters(compiler))
+                      .build())
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Look for function calls that are pure, and annotate them that way. */
@@ -2264,7 +2267,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("markPureFunctions")
           .setInternalFactory(PureFunctionIdentifier.Driver::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Inlines variables heuristically. */
@@ -2284,7 +2287,7 @@ public final class DefaultPassConfig extends PassConfig {
                 }
                 return new InlineVariables(compiler, mode, true);
               })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Inlines variables that are marked as constants. */
@@ -2295,7 +2298,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setInternalFactory(
               (compiler) ->
                   new InlineVariables(compiler, InlineVariables.Mode.CONSTANTS_ONLY, true))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Use data flow analysis to remove dead branches. */
@@ -2304,7 +2307,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.REMOVE_UNREACHABLE_CODE)
           .setRunInFixedPointLoop(true)
           .setInternalFactory(UnreachableCodeElimination::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Inlines simple methods, like getters */
@@ -2313,7 +2316,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName("inlineSimpleMethods")
           .setRunInFixedPointLoop(true)
           .setInternalFactory(InlineSimpleMethods::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Kills dead assignments. */
@@ -2322,7 +2325,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.DEAD_ASSIGNMENT_ELIMINATION)
           .setRunInFixedPointLoop(true)
           .setInternalFactory(DeadAssignmentsElimination::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Kills dead property assignments. */
@@ -2331,7 +2334,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName("deadPropertyAssignmentElimination")
           .setRunInFixedPointLoop(true)
           .setInternalFactory(DeadPropertyAssignmentElimination::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Inlines function calls. */
@@ -2348,7 +2351,7 @@ public final class DefaultPassConfig extends PassConfig {
                       options.assumeStrictThis() || options.expectStrictModeInput(),
                       options.assumeClosuresOnlyCaptureReferences,
                       options.maxFunctionSizeAfterInlining))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Inlines constant properties. */
@@ -2357,7 +2360,15 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.INLINE_PROPERTIES)
           .setRunInFixedPointLoop(true)
           .setInternalFactory(InlineProperties::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
+          .build();
+
+  /** Isolates injected polyfills & references from the global scope */
+  private final PassFactory isolatePolyfills =
+      PassFactory.builder()
+          .setName("IsolatePolyfills")
+          .setInternalFactory(IsolatePolyfills::new)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory removeUnusedCode =
@@ -2365,24 +2376,22 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.REMOVE_UNUSED_CODE)
           .setRunInFixedPointLoop(true)
           .setInternalFactory(
-              (compiler) -> {
-                boolean preserveAnonymousFunctionNames =
-                    options.anonymousFunctionNaming != AnonymousFunctionNamingPolicy.OFF;
-                return new RemoveUnusedCode.Builder(compiler)
-                    .removeLocalVars(options.removeUnusedLocalVars)
-                    .removeGlobals(options.removeUnusedVars)
-                    .preserveFunctionExpressionNames(preserveAnonymousFunctionNames)
-                    .removeUnusedPrototypeProperties(options.removeUnusedPrototypeProperties)
-                    .allowRemovalOfExternProperties(
-                        options.removeUnusedPrototypePropertiesInExterns)
-                    .removeUnusedThisProperties(options.isRemoveUnusedClassProperties())
-                    .removeUnusedObjectDefinePropertiesDefinitions(
-                        options.isRemoveUnusedClassProperties())
-                    .removeUnusedPolyfills(options.rewritePolyfills)
-                    .assumeGettersArePure(options.getAssumeGettersArePure())
-                    .build();
-              })
-          .setFeatureSet(ES2019_MODULES)
+              (compiler) ->
+                  new RemoveUnusedCode.Builder(compiler)
+                      .removeLocalVars(options.removeUnusedLocalVars)
+                      .removeGlobals(options.removeUnusedVars)
+                      .preserveFunctionExpressionNames(false)
+                      .removeUnusedPrototypeProperties(options.removeUnusedPrototypeProperties)
+                      .removeUnusedThisProperties(options.isRemoveUnusedClassProperties())
+                      .removeUnusedObjectDefinePropertiesDefinitions(
+                          options.isRemoveUnusedClassProperties())
+                      // If we are forcing injection of some library code, don't remove polyfills.
+                      // Otherwise, we might end up removing polyfills the user specifically asked
+                      // to include.
+                      .removeUnusedPolyfills(options.forceLibraryInjection.isEmpty())
+                      .assumeGettersArePure(options.getAssumeGettersArePure())
+                      .build())
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory removeUnusedCodeOnce =
@@ -2399,7 +2408,7 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler,
                       compiler.getModuleGraph(),
                       options.parentChunkCanSeeSymbolsDeclaredInChildren))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Move methods to a deeper common module */
@@ -2412,11 +2421,9 @@ public final class DefaultPassConfig extends PassConfig {
                   new CrossChunkMethodMotion(
                       compiler,
                       compiler.getCrossModuleIdGenerator(),
-                      // Only move properties in externs if we're not treating
-                      // them as exports.
-                      options.removeUnusedPrototypePropertiesInExterns,
+                      /* canModifyExterns= */ false, // remove this
                       options.crossChunkCodeMotionNoStubMethods))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** A data-flow based variable inliner. */
@@ -2424,7 +2431,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.FLOW_SENSITIVE_INLINE_VARIABLES)
           .setInternalFactory(FlowSensitiveInlineVariables::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Uses register-allocation algorithms to use fewer variables. */
@@ -2433,7 +2440,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.COALESCE_VARIABLE_NAMES)
           .setInternalFactory(
               (compiler) -> new CoalesceVariableNames(compiler, options.generatePseudoNames))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Some simple, local collapses (e.g., {@code var x; var y;} becomes {@code var x,y;}. */
@@ -2444,7 +2451,7 @@ public final class DefaultPassConfig extends PassConfig {
               (compiler) ->
                   new PeepholeOptimizationsPass(
                       compiler, PassNames.EXPLOIT_ASSIGN, new ExploitAssigns()))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Some simple, local collapses (e.g., {@code var x; var y;} becomes {@code var x,y;}. */
@@ -2452,7 +2459,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.COLLAPSE_VARIABLE_DECLARATIONS)
           .setInternalFactory(CollapseVariableDeclarations::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Extracts common sub-expressions. */
@@ -2475,7 +2482,7 @@ public final class DefaultPassConfig extends PassConfig {
 
                 return new ExtractPrototypeMemberDeclarations(compiler, pattern);
               })
-          .setFeatureSet(ES2019)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Rewrites common function definitions to be more compact. */
@@ -2483,7 +2490,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.REWRITE_FUNCTION_EXPRESSIONS)
           .setInternalFactory(FunctionRewriter::new)
-          .setFeatureSet(FeatureSet.latest())
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Collapses functions to not use the VAR keyword. */
@@ -2491,40 +2498,18 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.COLLAPSE_ANONYMOUS_FUNCTIONS)
           .setInternalFactory(CollapseAnonymousFunctions::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
-  /** Moves function declarations to the top, to simulate actual hoisting. */
-  private final PassFactory moveFunctionDeclarations =
+  /**
+   * Moves function declarations to the top to simulate actual hoisting and rewrites block scope
+   * declarations to 'var'.
+   */
+  private final PassFactory rewriteGlobalDeclarationsForTryCatchWrapping =
       PassFactory.builder()
-          .setName(PassNames.MOVE_FUNCTION_DECLARATIONS)
-          .setInternalFactory(MoveFunctionDeclarations::new)
-          .setFeatureSet(ES2019)
-          .build();
-
-  private final PassFactory nameUnmappedAnonymousFunctions =
-      PassFactory.builder()
-          .setName(PassNames.NAME_ANONYMOUS_FUNCTIONS)
-          .setInternalFactory(NameAnonymousFunctions::new)
-          .setFeatureSet(ES2019_MODULES)
-          .build();
-
-  private final PassFactory nameMappedAnonymousFunctions =
-      PassFactory.builder()
-          .setName(PassNames.NAME_ANONYMOUS_FUNCTIONS)
-          .setInternalFactory(
-              (compiler) ->
-                  new CompilerPass() {
-                    @Override
-                    public void process(Node externs, Node root) {
-                      NameAnonymousFunctionsMapped naf =
-                          new NameAnonymousFunctionsMapped(
-                              compiler, options.inputAnonymousFunctionNamingMap);
-                      naf.process(externs, root);
-                      compiler.setAnonymousFunctionNameMap(naf.getFunctionMap());
-                    }
-                  })
-          .setFeatureSet(ES2019_MODULES)
+          .setName("rewriteGlobalDeclarationsForTryCatchWrapping")
+          .setInternalFactory(RewriteGlobalDeclarationsForTryCatchWrapping::new)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Alias string literals with global variables, to avoid creating lots of transient objects. */
@@ -2539,7 +2524,7 @@ public final class DefaultPassConfig extends PassConfig {
                       options.aliasAllStrings ? null : options.aliasableStrings,
                       options.aliasStringsBlacklist,
                       options.outputJsStringUsage))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /**
@@ -2554,8 +2539,9 @@ public final class DefaultPassConfig extends PassConfig {
                   new AmbiguateProperties(
                       compiler,
                       options.getPropertyReservedNamingFirstChars(),
-                      options.getPropertyReservedNamingNonFirstChars()))
-          .setFeatureSet(ES2019_MODULES)
+                      options.getPropertyReservedNamingNonFirstChars(),
+                      compiler.getExternProperties()))
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Mark the point at which the normalized AST assumptions no longer hold. */
@@ -2570,22 +2556,21 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler.setLifeCycleStage(LifeCycleStage.RAW);
                     }
                   })
-          .setFeatureSet(FeatureSet.latest())
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory normalize =
       PassFactory.builder()
           .setName(PassNames.NORMALIZE)
           .setInternalFactory((compiler) -> new Normalize(compiler, false))
-          // TODO(johnlenz): Update this and gatherRawExports to latest()
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory externExports =
       PassFactory.builder()
           .setName(PassNames.EXTERN_EXPORTS)
           .setInternalFactory(ExternExportsPass::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Denormalize the AST for code generation. */
@@ -2593,18 +2578,15 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("denormalize")
           .setInternalFactory(Denormalize::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Inverting name normalization. */
   private final PassFactory invertContextualRenaming =
       PassFactory.builder()
           .setName("invertContextualRenaming")
-          .setInternalFactory(
-              (compiler) -> {
-                return MakeDeclaredNamesUnique.getContextualRenameInverter(compiler);
-              })
-          .setFeatureSet(ES2019_MODULES)
+          .setInternalFactory(MakeDeclaredNamesUnique::getContextualRenameInverter)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Renames properties. */
@@ -2631,7 +2613,7 @@ public final class DefaultPassConfig extends PassConfig {
                   }
                 };
               })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Renames variables. */
@@ -2649,16 +2631,13 @@ public final class DefaultPassConfig extends PassConfig {
                   }
                 };
               })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   private VariableMap runVariableRenaming(
       AbstractCompiler compiler, VariableMap prevVariableMap,
       Node externs, Node root) {
-    char[] reservedChars =
-        options.anonymousFunctionNaming.getReservedCharacters();
-    boolean preserveAnonymousFunctionNames =
-        options.anonymousFunctionNaming != AnonymousFunctionNamingPolicy.OFF;
+    char[] reservedChars = null;
     Set<String> reservedNames = new HashSet<>();
     if (options.renamePrefixNamespace != null) {
       // don't use the prefix name as a global symbol.
@@ -2666,18 +2645,17 @@ public final class DefaultPassConfig extends PassConfig {
     }
     reservedNames.addAll(compiler.getExportedNames());
     reservedNames.addAll(ParserRunner.getReservedVars());
-    RenameVars rn = new RenameVars(
-        compiler,
-        options.renamePrefix,
-        options.variableRenaming == VariableRenamingPolicy.LOCAL,
-        preserveAnonymousFunctionNames,
-        options.generatePseudoNames,
-        options.shadowVariables,
-        options.preferStableNames,
-        prevVariableMap,
-        reservedChars,
-        reservedNames,
-        options.nameGenerator);
+    RenameVars rn =
+        new RenameVars(
+            compiler,
+            options.renamePrefix,
+            options.variableRenaming == VariableRenamingPolicy.LOCAL,
+            options.generatePseudoNames,
+            options.preferStableNames,
+            prevVariableMap,
+            reservedChars,
+            reservedNames,
+            options.nameGenerator);
     rn.process(externs, root);
     return rn.getVariableMap();
   }
@@ -2687,7 +2665,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("renameLabels")
           .setInternalFactory(RenameLabels::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Convert bracket access to dot access */
@@ -2695,14 +2673,14 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName(PassNames.CONVERT_TO_DOTTED_PROPERTIES)
           .setInternalFactory(ConvertToDottedProperties::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory checkAstValidity =
       PassFactory.builder()
           .setName("checkAstValidity")
           .setInternalFactory(AstValidator::new)
-          .setFeatureSet(FeatureSet.latest())
+          .setFeatureSetForChecks()
           .build();
 
   /** Checks that all variables are defined. */
@@ -2710,23 +2688,21 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("varCheckValidity")
           .setInternalFactory((compiler) -> new VarCheck(compiler, true))
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory instrumentForCodeCoverage =
       PassFactory.builder()
           .setName("instrumentForCodeCoverage")
           .setInternalFactory(
-              (compiler) -> {
-                // TODO(johnlenz): make global instrumentation an option
-                if (options.instrumentBranchCoverage) {
-                  return new CoverageInstrumentationPass(
-                      compiler, CoverageReach.CONDITIONAL, InstrumentOption.BRANCH_ONLY);
-                } else {
-                  return new CoverageInstrumentationPass(compiler, CoverageReach.CONDITIONAL);
-                }
-              })
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+              (compiler) ->
+                  // TODO(johnlenz): make global instrumentation an option
+                  new CoverageInstrumentationPass(
+                      compiler,
+                      CoverageReach.CONDITIONAL,
+                      options.getInstrumentForCoverageOption(),
+                      options.getProductionInstrumentationArrayName()))
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Extern property names gathering pass. */
@@ -2734,7 +2710,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("gatherExternProperties")
           .setInternalFactory(GatherExternProperties::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForChecks()
           .build();
 
   /**
@@ -2745,11 +2721,8 @@ public final class DefaultPassConfig extends PassConfig {
   private PassFactory getCustomPasses(final CustomPassExecutionTime executionTime) {
     return PassFactory.builder()
         .setName("runCustomPasses")
-        .setInternalFactory(
-            (compiler) -> {
-              return runInSerial(options.customPasses.get(executionTime));
-            })
-        .setFeatureSet(ES_NEXT)
+        .setInternalFactory((compiler) -> runInSerial(options.customPasses.get(executionTime)))
+        .setFeatureSetForOptimizations()
         .build();
   }
 
@@ -2793,14 +2766,14 @@ public final class DefaultPassConfig extends PassConfig {
                       compiler.getOptions().polymerExportPolicy,
                       compiler.getOptions().propertyRenaming
                           == PropertyRenamingPolicy.ALL_UNQUOTED))
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory chromePass =
       PassFactory.builder()
           .setName("chromePass")
           .setInternalFactory(ChromePass::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForChecks()
           .build();
 
   /** Rewrites the super accessors calls to support Dart Dev Compiler output. */
@@ -2808,7 +2781,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builderForHotSwap()
           .setName("dartSuperAccessorsPass")
           .setInternalFactory(DartSuperAccessorsPass::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Rewrites J2CL constructs to be more optimizable. */
@@ -2817,7 +2790,7 @@ public final class DefaultPassConfig extends PassConfig {
           .setName("j2clConstantHoisterPass")
           .setRunInFixedPointLoop(true)
           .setInternalFactory(J2clConstantHoisterPass::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Optimizes J2CL clinit methods. */
@@ -2831,7 +2804,7 @@ public final class DefaultPassConfig extends PassConfig {
                     compiler.getChangedScopeNodesForPass("j2clClinitPass");
                 return new J2clClinitPrunerPass(compiler, changedScopeNodes);
               })
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Rewrites J2CL constructs to be more optimizable. */
@@ -2839,7 +2812,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("j2clES6Pass")
           .setInternalFactory(J2clPropertyInlinerPass::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Rewrites J2CL constructs to be more optimizable. */
@@ -2847,7 +2820,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("j2clPass")
           .setInternalFactory(J2clPass::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   /** Rewrites J2CL constructs to be more optimizable. */
@@ -2855,28 +2828,28 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("j2clUtilGetDefineRewriterPass")
           .setInternalFactory(J2clUtilGetDefineRewriterPass::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory j2clAssertRemovalPass =
       PassFactory.builder()
           .setName("j2clAssertRemovalPass")
           .setInternalFactory(J2clAssertRemovalPass::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   private final PassFactory j2clSourceFileChecker =
       PassFactory.builder()
           .setName("j2clSourceFileChecker")
           .setInternalFactory(J2clSourceFileChecker::new)
-          .setFeatureSet(FeatureSet.latest())
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory j2clChecksPass =
       PassFactory.builder()
           .setName("j2clChecksPass")
           .setInternalFactory(J2clChecksPass::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory checkConformance =
@@ -2886,7 +2859,23 @@ public final class DefaultPassConfig extends PassConfig {
               (compiler) ->
                   new CheckConformance(
                       compiler, ImmutableList.copyOf(options.getConformanceConfigs())))
-          .setFeatureSet(TYPE_CHECK_SUPPORTED)
+          .setFeatureSetForChecks()
+          .build();
+
+  /** Convert types from type-checking to optimization "colors" */
+  private final PassFactory typesToColors =
+      PassFactory.builder()
+          .setName("typesToColors")
+          .setInternalFactory(ConvertTypesToColors::new)
+          .setFeatureSetForOptimizations()
+          .build();
+
+  /** Remove types */
+  private final PassFactory removeTypes =
+      PassFactory.builder()
+          .setName("removeTypes")
+          .setInternalFactory(RemoveTypes::new)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Optimizations that output ES6 features. */
@@ -2894,7 +2883,7 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builder()
           .setName("optimizeToEs6")
           .setInternalFactory(SubstituteEs6Syntax::new)
-          .setFeatureSet(ES2019_MODULES)
+          .setFeatureSetForOptimizations()
           .build();
 
   /** Rewrites goog.module in whitespace only mode */
@@ -2902,21 +2891,21 @@ public final class DefaultPassConfig extends PassConfig {
       PassFactory.builderForHotSwap()
           .setName("whitespaceWrapGoogModules")
           .setInternalFactory(WhitespaceWrapGoogModules::new)
-          .setFeatureSet(FeatureSet.latest())
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory rewriteCommonJsModules =
       PassFactory.builder()
           .setName(PassNames.REWRITE_COMMON_JS_MODULES)
           .setInternalFactory(ProcessCommonJSModules::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory rewriteScriptsToEs6Modules =
       PassFactory.builder()
           .setName(PassNames.REWRITE_SCRIPTS_TO_ES6_MODULES)
           .setInternalFactory(Es6RewriteScriptsToModules::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory gatherModuleMetadataPass =
@@ -2929,7 +2918,7 @@ public final class DefaultPassConfig extends PassConfig {
                 return new GatherModuleMetadata(
                     compiler, options.processCommonJSModules, options.moduleResolutionMode);
               })
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
   private final PassFactory createModuleMapPass =
@@ -2937,20 +2926,22 @@ public final class DefaultPassConfig extends PassConfig {
           .setName(PassNames.CREATE_MODULE_MAP)
           .setInternalFactory(
               (compiler) -> new ModuleMapCreator(compiler, compiler.getModuleMetadataMap()))
-          .setFeatureSet(ES_NEXT)
+          // does not look at AST
+          .setFeatureSet(FeatureSet.all())
           .build();
 
   private final PassFactory gatherGettersAndSetters =
       PassFactory.builder()
           .setName(PassNames.GATHER_GETTERS_AND_SETTERS)
           .setInternalFactory(GatherGetterAndSetterProperties::new)
-          .setFeatureSet(ES_NEXT)
+          .setFeatureSetForChecks()
           .build();
 
+  // this pass is just adding script without looking at the AST so it should accept all features
   private final PassFactory addSyntheticScript =
       PassFactory.builder()
           .setName("ADD_SYNTHETIC_SCRIPT")
-          .setFeatureSet(TYPESCRIPT)
+          .setFeatureSet(FeatureSet.all())
           .setInternalFactory(
               (compiler) -> (externs, js) -> compiler.initializeSyntheticCodeInput())
           .build();
@@ -2958,7 +2949,14 @@ public final class DefaultPassConfig extends PassConfig {
   private final PassFactory removeSyntheticScript =
       PassFactory.builder()
           .setName("REMOVE_SYNTHETIC_SCRIPT")
-          .setFeatureSet(TYPESCRIPT)
+          .setFeatureSet(FeatureSet.all())
           .setInternalFactory((compiler) -> (externs, js) -> compiler.removeSyntheticCodeInput())
+          .build();
+
+  private final PassFactory mergeSyntheticScript =
+      PassFactory.builder()
+          .setName("MERGE_SYNTHETIC_SCRIPT")
+          .setFeatureSet(FeatureSet.all())
+          .setInternalFactory((compiler) -> (externs, js) -> compiler.mergeSyntheticCodeInput())
           .build();
 }

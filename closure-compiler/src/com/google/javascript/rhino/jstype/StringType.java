@@ -42,7 +42,6 @@ package com.google.javascript.rhino.jstype;
 import static com.google.javascript.rhino.jstype.TernaryValue.FALSE;
 import static com.google.javascript.rhino.jstype.TernaryValue.UNKNOWN;
 
-
 /**
  * String type.
  */
@@ -51,6 +50,11 @@ public final class StringType extends ValueType {
 
   StringType(JSTypeRegistry registry) {
     super(registry);
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.STRING;
   }
 
   @Override
@@ -63,7 +67,8 @@ public final class StringType extends ValueType {
         || that.isSubtypeOf(getNativeType(JSTypeNative.OBJECT_TYPE))
         || that.isSubtypeOf(getNativeType(JSTypeNative.NUMBER_TYPE))
         || that.isSubtypeOf(getNativeType(JSTypeNative.STRING_TYPE))
-        || that.isSubtypeOf(getNativeType(JSTypeNative.BOOLEAN_TYPE))) {
+        || that.isSubtypeOf(getNativeType(JSTypeNative.BOOLEAN_TYPE))
+        || that.isSubtypeOf(getNativeType(JSTypeNative.BIGINT_TYPE))) {
       return UNKNOWN;
     }
     return FALSE;
@@ -88,11 +93,6 @@ public final class StringType extends ValueType {
   public boolean matchesObjectContext() {
     // TODO(user): Revisit this for ES4, which is stricter.
     return true;
-  }
-
-  @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(getDisplayName());
   }
 
   @Override

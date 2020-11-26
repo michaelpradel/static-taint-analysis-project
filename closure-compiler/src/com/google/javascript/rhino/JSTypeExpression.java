@@ -39,11 +39,14 @@
 
 package com.google.javascript.rhino;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.javascript.rhino.jstype.JSType;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.jstype.StaticTypedScope;
 import java.io.Serializable;
+import java.util.Set;
+import java.util.function.Consumer;
 
 /**
  * When parsing a jsdoc, a type-annotation string is parsed to a type AST. Somewhat confusingly, we
@@ -70,6 +73,66 @@ public final class JSTypeExpression implements Serializable {
   public JSTypeExpression(Node root, String sourceName) {
     this.root = root;
     this.sourceName = sourceName;
+  }
+
+  /** Replaces given names in this type expression with unknown */
+  public JSTypeExpression replaceNamesWithUnknownType(Set<String> names) {
+    Node oldExprRoot = this.root.cloneTree();
+    Node newExprRoot = replaceNames(oldExprRoot, names);
+    JSTypeExpression newTypeExpression = new JSTypeExpression(newExprRoot, sourceName);
+    return newTypeExpression;
+  }
+
+  /**
+   * Recursively traverse over the type tree and replace matched types with unknown type
+   *
+   * @param n Root of the JsTypeExpression on which replacement is applied
+   * @param names The set of names to replace in this type expression
+   * @return the new root after replacing the names
+   */
+  private static Node replaceNames(Node n, Set<String> names) {
+    if (n == null) {
+      return null;
+    }
+    for (Node child : n.children()) {
+      replaceNames(child, names);
+    }
+    if (n.isString() && names.contains(n.getString())) {
+      Node qMark = new Node(Token.QMARK);
+      qMark.addChildrenToBack(n.removeChildren());
+      if (n.getParent() != null) {
+        n.replaceWith(qMark);
+      }
+      return qMark;
+    }
+    return n;
+  }
+
+  /** Returns a list of all type nodes in this type expression. */
+  public ImmutableList<Node> getAllTypeNodes() {
+    ImmutableList.Builder<Node> builder = ImmutableList.builder();
+    visitAllTypeNodes(this.root, builder::add);
+    return builder.build();
+  }
+
+  /** Returns a set of all string names in this type expression */
+  public ImmutableSet<String> getAllTypeNames() {
+    ImmutableSet.Builder<String> builder = ImmutableSet.builder();
+    visitAllTypeNodes(this.root, (n) -> builder.add(n.getString()));
+    return builder.build();
+  }
+
+  /** Recursively traverse the type tree and visit all type nodes. */
+  private static void visitAllTypeNodes(Node n, Consumer<Node> visitor) {
+    if (n == null) {
+      return;
+    }
+    for (Node child : n.children()) {
+      visitAllTypeNodes(child, visitor);
+    }
+    if (n.isString()) {
+      visitor.accept(n);
+    }
   }
 
   /**

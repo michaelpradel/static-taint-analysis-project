@@ -52,10 +52,10 @@ public abstract class Config {
     ECMASCRIPT8(FeatureSet.ES8_MODULES),
     ECMASCRIPT_2018(FeatureSet.ES2018_MODULES),
     ECMASCRIPT_2019(FeatureSet.ES2019_MODULES),
+    ECMASCRIPT_2020(FeatureSet.ES2020_MODULES),
     ES_NEXT(FeatureSet.ES_NEXT),
-    UNSUPPORTED(FeatureSet.ES_UNSUPPORTED),
-    TYPESCRIPT(FeatureSet.TYPESCRIPT),
-    ;
+    ES_NEXT_IN(FeatureSet.ES_NEXT_IN),
+    UNSUPPORTED(FeatureSet.ES_UNSUPPORTED);
 
     public final FeatureSet featureSet;
 
@@ -147,7 +147,7 @@ public abstract class Config {
 
   public static Builder builder() {
     return new AutoValue_Config.Builder()
-        .setLanguageMode(LanguageMode.TYPESCRIPT)
+        .setLanguageMode(LanguageMode.UNSUPPORTED)
         .setStrictMode(StrictMode.STRICT)
         .setJsDocParsingMode(JsDocParsing.TYPES_ONLY)
         .setRunMode(RunMode.STOP_AFTER_ERROR)
@@ -184,11 +184,11 @@ public abstract class Config {
     public abstract Builder setAnnotations(ImmutableMap<String, Annotation> names);
   }
 
-  /** Create the annotation names from the user-specified annotation whitelist. */
-  private static ImmutableMap<String, Annotation> buildAnnotations(Iterable<String> whitelist) {
+  /** Create the annotation names from the user-specified annotation allowlist. */
+  private static ImmutableMap<String, Annotation> buildAnnotations(Iterable<String> allowlist) {
     ImmutableMap.Builder<String, Annotation> annotationsBuilder = ImmutableMap.builder();
     annotationsBuilder.putAll(Annotation.recognizedAnnotations);
-    for (String unrecognizedAnnotation : whitelist) {
+    for (String unrecognizedAnnotation : allowlist) {
       if (!unrecognizedAnnotation.isEmpty()
           && !Annotation.recognizedAnnotations.containsKey(unrecognizedAnnotation)) {
         annotationsBuilder.put(unrecognizedAnnotation, Annotation.NOT_IMPLEMENTED);

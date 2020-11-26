@@ -20,6 +20,8 @@ import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 import static com.google.javascript.rhino.testing.TypeSubject.assertType;
 
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.testing.NoninjectingCompiler;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.Token;
 import com.google.javascript.rhino.jstype.FunctionType;
@@ -45,6 +47,7 @@ import org.junit.runners.JUnit4;
  * </ul>
  */
 @RunWith(JUnit4.class)
+@SuppressWarnings("RhinoNodeGetFirstFirstChild")
 public final class Es6ConvertSuperTest extends CompilerTestCase {
 
   public Es6ConvertSuperTest() {
@@ -1116,69 +1119,6 @@ public final class Es6ConvertSuperTest extends CompilerTestCase {
         .hasLength(21)
         .isIndexable(false);
     assertType(argumentsNode.getJSType()).isEqualTo(argumentsType);
-  }
-
-  @Test
-  public void testSynthesizingConstructorOfBaseClassInExtern() {
-    testExternChanges(
-        "class A { }",
-        "new A();", // Source to pin externs.
-        "class A { constructor() { } }");
-    // TODO(bradfordcsmith): Test addition of types in externs.
-    // Currently testExternChanges() doesn't set things up correctly for getting the last compiler
-    // and looking up type information in the registry to work.
-  }
-
-  @Test
-  public void testSynthesizingConstructorOfDerivedClassInExtern() {
-    testExternChanges(
-        lines(
-            "class A {", // Force wrapping.
-            "  constructor() { }",
-            "}",
-            "",
-            "class B extends A { }"),
-        "new B();", // Source to pin externs.
-        lines(
-            "class A {",
-            "  constructor() { }",
-            "}",
-            "",
-            "class B extends A {",
-            "  constructor() { }",
-            "}"));
-    // TODO(bradfordcsmith): Test addition of types in externs.
-    // Currently testExternChanges() doesn't set things up correctly for getting the last compiler
-    // and looking up type information in the registry to work.
-  }
-
-  @Test
-  public void testStrippingSuperCallFromConstructorOfDerivedClassInExtern() {
-    testExternChanges(
-        lines(
-            "const namespace = {};",
-            "",
-            "namespace.A = class {",
-            "  constructor() { }",
-            "}",
-            "",
-            "class B extends namespace.A {",
-            "  constructor() { super(); }",
-            "}"),
-        "new B();", // Source to pin externs.
-        lines(
-            "const namespace = {};",
-            "",
-            "namespace.A = class {",
-            "  constructor() { }",
-            "}",
-            "",
-            "class B extends namespace.A {",
-            "  constructor() { }",
-            "}"));
-    // TODO(bradfordcsmith): Test addition of types in externs.
-    // Currently testExternChanges() doesn't set things up correctly for getting the last compiler
-    // and looking up type information in the registry to work.
   }
 
   @Test

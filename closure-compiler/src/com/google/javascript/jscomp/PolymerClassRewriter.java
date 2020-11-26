@@ -38,6 +38,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -230,7 +231,7 @@ final class PolymerClassRewriter {
     Node objLit = checkNotNull(cls.descriptor);
 
     // Add {@code @lends} to the object literal.
-    JSDocInfoBuilder objLitDoc = new JSDocInfoBuilder(true);
+    JSDocInfoBuilder objLitDoc = JSDocInfo.builder().parseDocumentation();
     JSTypeExpression jsTypeExpression =
         new JSTypeExpression(
             IR.string(cls.target.getQualifiedName() + ".prototype").srcref(exprRoot),
@@ -258,6 +259,7 @@ final class PolymerClassRewriter {
     if (ctorKey != null) {
       ctorKey.removeProp(Node.JSDOC_INFO_PROP);
     }
+
     // Check for a conflicting definition of PolymerElement
     if (!traversal.inGlobalScope()) {
       Var polymerElement = traversal.getScope().getVar("PolymerElement");
@@ -272,19 +274,19 @@ final class PolymerClassRewriter {
                 Integer.toString(nameNode.getCharno())));
       }
     }
+
     Node declarationCode = generateDeclarationCode(exprRoot, cls, constructorDoc, traversal);
+    String basePath = cls.target.getQualifiedName() + ".prototype.";
+    appendBehaviorPropertiesToBlock(cls, propsAndBehaviorBlock, basePath, /*isExternsBlock*/ false);
     appendPropertiesToBlock(
-        cls.props,
-        propsAndBehaviorBlock,
-        cls.target.getQualifiedName() + ".prototype.",
-        /* isExternsBlock= */ false);
+        cls.props, propsAndBehaviorBlock, basePath, /* isExternsBlock= */ false);
     appendBehaviorMembersToBlock(cls, propsAndBehaviorBlock);
-    ImmutableList<MemberDefinition> readOnlyProps =
+    ImmutableList<MemberDefinition> readOnlyPropsAll =
         parseReadOnlyProperties(cls, propsAndBehaviorBlock);
-    ImmutableList<MemberDefinition> attributeReflectedProps =
+    ImmutableList<MemberDefinition> attributeReflectedPropsAll =
         parseAttributeReflectedProperties(cls);
-    createExportsAndExterns(cls, readOnlyProps, attributeReflectedProps);
-    removePropertyDocs(objLit, PolymerClassDefinition.DefinitionType.ObjectLiteral);
+    createExportsAndExterns(cls, readOnlyPropsAll, attributeReflectedPropsAll);
+    removePropertyDocs(objLit, cls.defType);
 
     Node propsAndBehaviorCode = propsAndBehaviorBlock.removeChildren();
     Node parent = exprRoot.getParent();
@@ -385,6 +387,8 @@ final class PolymerClassRewriter {
     // For simplicity add everything into a block, before adding it to the AST.
     Node block = IR.block();
 
+    appendBehaviorPropertiesToBlock(
+        cls, block, cls.target.getQualifiedName() + ".prototype.", /*isExternsBlock*/ false);
     // For each Polymer property we found in the "properties" configuration object, append a
     // property declaration to the prototype (e.g. "/** @type {string} */ MyElement.prototype.foo").
     appendPropertiesToBlock(
@@ -451,7 +455,7 @@ final class PolymerClassRewriter {
         propertySinks.addAll(addComplexObserverReflectionCalls(cls));
       }
 
-      if (propertySinks.size() > 0) {
+      if (!propertySinks.isEmpty()) {
         if (!propertySinkExternInjected
             && traversal.getScope().getVar(CheckSideEffects.PROTECTOR_FN) == null) {
           CheckSideEffects.addExtern(compiler);
@@ -573,6 +577,20 @@ final class PolymerClassRewriter {
       }
     }
 
+    if (cls.behaviorProps != null) {
+      for (Map.Entry<MemberDefinition, BehaviorDefinition> itr : cls.behaviorProps.entrySet()) {
+        MemberDefinition prop = itr.getKey(); // Generate the setter for readOnly properties.
+        if (prop.value.isObjectLit()) {
+          Node readOnlyValue = NodeUtil.getFirstPropMatchingKey(prop.value, "readOnly");
+          if (readOnlyValue != null && readOnlyValue.isTrue()) {
+            Node setter = makeReadOnlySetter(prop, qualifiedPath);
+            setter.useSourceInfoIfMissingFromForTree(prop.name);
+            block.addChildToBack(setter);
+            readOnlyProps.add(prop);
+          }
+        }
+      }
+    }
     return readOnlyProps.build();
   }
 
@@ -586,6 +604,19 @@ final class PolymerClassRewriter {
         Node reflectedValue = NodeUtil.getFirstPropMatchingKey(prop.value, "reflectToAttribute");
         if (reflectedValue != null && reflectedValue.isTrue()) {
           attrReflectedProps.add(prop);
+        }
+      }
+    }
+
+    if (cls.behaviorProps != null) {
+      for (Map.Entry<MemberDefinition, BehaviorDefinition> itr : cls.behaviorProps.entrySet()) {
+        MemberDefinition prop = itr.getKey();
+        // Generate the setter for readOnly properties.
+        if (prop.value.isObjectLit()) {
+          Node reflectedValue = NodeUtil.getFirstPropMatchingKey(prop.value, "reflectToAttribute");
+          if (reflectedValue != null && reflectedValue.isTrue()) {
+            attrReflectedProps.add(prop);
+          }
         }
       }
     }
@@ -644,39 +675,97 @@ final class PolymerClassRewriter {
     }
   }
 
+  /**
+   * Replaces JSDoc types in externs with unknown type. For a JSDoc like @type {{ propertyName :
+   * string }}, collects all such "propertyName"s, and generates extern vars with an attached
+   * {{propertyName: ?}} JsDoc. This is to prevent renaming of vars in source code with the same
+   * names as propertyNames.
+   */
+  private JSDocInfo replaceJSDocAndAddNewVars(
+      MemberDefinition prop, JSTypeExpression propType, Node block) {
+    JSDocInfoBuilder infoBuilder = JSDocInfoBuilder.maybeCopyFrom(prop.info);
+    infoBuilder.recordType(propType);
+    JSDocInfo origInfo = infoBuilder.build();
+    ImmutableSet<String> propertyNames = propType.getRecordPropertyNames();
+    createVarsInExternsBlock(block, propertyNames, propType, prop);
+    JSTypeExpression unknown =
+        new JSTypeExpression(new Node(Token.QMARK), propType.getSourceName());
+    JSDocInfoBuilder newInfoBuilder = JSDocInfoBuilder.maybeCopyFromWithNewType(origInfo, unknown);
+    return newInfoBuilder.build();
+  }
+
+  /** Returns a node from a property's definition in the Polymer element or behavior */
+  private Node getPropertyNode(MemberDefinition prop, String basePath) {
+    // If a property string is quoted, make sure the added prototype properties are also quoted
+    if (prop.name.isQuotedString()) {
+      return null;
+    }
+    Node propertyNode =
+        IR.exprResult(NodeUtil.newQName(compiler, basePath + prop.name.getString()));
+    propertyNode.useSourceInfoIfMissingFromForTree(prop.name);
+
+    return propertyNode;
+  }
+
+  /**
+   * Iterates through all the behaviors of this polymer call, and appends the properties of each
+   * behavior to the given block.
+   */
+  private void appendBehaviorPropertiesToBlock(
+      PolymerClassDefinition cls, Node block, String basePath, boolean isExternsBlock) {
+    if (cls.behaviors == null || cls.behaviors.isEmpty() || cls.behaviorProps == null) {
+      return;
+    }
+
+    for (Map.Entry<MemberDefinition, BehaviorDefinition> itr : cls.behaviorProps.entrySet()) {
+      BehaviorDefinition behavior = itr.getValue();
+      MemberDefinition prop = itr.getKey();
+
+      Node propertyNode = getPropertyNode(prop, basePath);
+      if (propertyNode == null) {
+        continue;
+      }
+
+      JSTypeExpression propType = PolymerPassStaticUtils.getTypeFromProperty(prop, compiler);
+      if (propType == null) {
+        continue;
+      }
+
+      JSDocInfo info = null;
+      if (isExternsBlock) {
+        info = replaceJSDocAndAddNewVars(prop, propType, block);
+      } else {
+        JSDocInfoBuilder infoBuilder = getJSDocInfoBuilderForBehavior(behavior, prop);
+        infoBuilder.recordType(propType);
+        info = infoBuilder.build();
+      }
+      propertyNode.getFirstChild().setJSDocInfo(info);
+      block.addChildToBack(propertyNode);
+    }
+  }
+
   /** Appends all of the given properties to the given block. */
   private void appendPropertiesToBlock(
       List<MemberDefinition> props, Node block, String basePath, boolean isExternsBlock) {
     for (MemberDefinition prop : props) {
-      Node propertyNode =
-          IR.exprResult(NodeUtil.newQName(compiler, basePath + prop.name.getString()));
 
-      // If a property string is quoted, make sure the added prototype properties are also quoted
-      if (prop.name.isQuotedString()) {
+      Node propertyNode = getPropertyNode(prop, basePath);
+      if (propertyNode == null) {
         continue;
       }
 
-      propertyNode.useSourceInfoIfMissingFromForTree(prop.name);
-      JSDocInfoBuilder infoBuilder = JSDocInfoBuilder.maybeCopyFrom(prop.info);
-
       JSTypeExpression propType = PolymerPassStaticUtils.getTypeFromProperty(prop, compiler);
       if (propType == null) {
-        return;
+        continue;
       }
-      infoBuilder.recordType(propType);
 
-      JSDocInfo info = infoBuilder.build();
-
-      // We make all externs' types as unknown, and generate new vars with {propName:?} JsDoc
-      // to prevent those properties from renaming
+      JSDocInfo info = null;
       if (isExternsBlock) {
-        ImmutableSet<String> propertyNames = propType.getRecordPropertyNames();
-        createVarsInExternsBlock(block, propertyNames, propType, prop);
-        JSTypeExpression unknown =
-            new JSTypeExpression(new Node(Token.QMARK), propType.getSourceName());
-
-        JSDocInfoBuilder newInfoBuilder = JSDocInfoBuilder.copyFromWithNewType(info, unknown);
-        info = newInfoBuilder.build();
+        info = replaceJSDocAndAddNewVars(prop, propType, block);
+      } else {
+        JSDocInfoBuilder infoBuilder = JSDocInfoBuilder.maybeCopyFrom(prop.info);
+        infoBuilder.recordType(propType);
+        info = infoBuilder.build();
       }
       propertyNode.getFirstChild().setJSDocInfo(info);
       block.addChildToBack(propertyNode);
@@ -748,6 +837,45 @@ final class PolymerClassRewriter {
     }
   }
 
+  // TODO(rishipal): Consider passing behavior's module instead of behavior definition and moving
+  //  this into a common, re-usable place
+  private Map<String, Var> accumulateModuleLocalVars(BehaviorDefinition behavior) {
+    Map<String, Var> moduleLocalNames = new LinkedHashMap<>();
+    List<Var> orderedNames = new ArrayList<>();
+    SyntacticScopeCreator scopeCreator = new SyntacticScopeCreator(compiler);
+    Scope globalScope = Scope.createGlobalScope(behavior.behaviorModule.getParent());
+    NodeUtil.getAllVarsDeclaredInModule(
+        behavior.behaviorModule,
+        moduleLocalNames,
+        orderedNames,
+        compiler,
+        scopeCreator,
+        globalScope);
+    return moduleLocalNames;
+  }
+
+  private JSDocInfoBuilder getJSDocInfoBuilderForBehavior(
+      BehaviorDefinition behavior, MemberDefinition behaviorFunctionOrProp) {
+    JSDocInfoBuilder info;
+    if (!behavior.isGlobalDeclaration
+        && behaviorFunctionOrProp.info != null
+        && behaviorFunctionOrProp.info.containsTypeDeclaration()) {
+
+      if (behavior.behaviorModule != null) {
+        Map<String, Var> moduleLocalNames = accumulateModuleLocalVars(behavior);
+        // Replace module local names in @type, @return and @param with unknown type
+        info =
+            JSDocInfoBuilder.maybeCopyFromAndReplaceNames(
+                behaviorFunctionOrProp.info, moduleLocalNames.keySet());
+      } else {
+        info = JSDocInfoBuilder.maybeCopyFrom(behaviorFunctionOrProp.info);
+      }
+    } else {
+      info = JSDocInfoBuilder.maybeCopyFrom(behaviorFunctionOrProp.info);
+    }
+    return info;
+  }
+
   /** Appends all required behavior functions and non-property members to the given block. */
   private void appendBehaviorMembersToBlock(final PolymerClassDefinition cls, Node block) {
     String qualifiedPath = cls.target.getQualifiedName() + ".prototype.";
@@ -770,7 +898,9 @@ final class PolymerClassRewriter {
         Node exprResult =
             IR.exprResult(IR.assign(NodeUtil.newQName(compiler, qualifiedPath + fnName), fnValue));
         exprResult.useSourceInfoIfMissingFromForTree(behaviorFunction.name);
-        JSDocInfoBuilder info = JSDocInfoBuilder.maybeCopyFrom(behaviorFunction.info);
+
+        JSDocInfoBuilder info = getJSDocInfoBuilderForBehavior(behavior, behaviorFunction);
+
         // Uses of private members that come from behaviors are not recognized correctly,
         // so just suppress that warning.
         info.addSuppression("unusedPrivateMembers");
@@ -814,10 +944,11 @@ final class PolymerClassRewriter {
 
         Node exprResult = IR.exprResult(NodeUtil.newQName(compiler, qualifiedPath + propName));
         exprResult.useSourceInfoFromForTree(behaviorProp.name);
-        JSDocInfoBuilder info = JSDocInfoBuilder.maybeCopyFrom(behaviorProp.info);
+
+        JSDocInfoBuilder info = getJSDocInfoBuilderForBehavior(behavior, behaviorProp);
 
         if (behaviorProp.name.isGetterDef()) {
-          info = new JSDocInfoBuilder(true);
+          info = JSDocInfo.builder().parseDocumentation();
           if (behaviorProp.info != null && behaviorProp.info.getReturnType() != null) {
             info.recordType(behaviorProp.info.getReturnType());
           }
@@ -854,13 +985,14 @@ final class PolymerClassRewriter {
    */
   private Node makeReadOnlySetter(MemberDefinition prop, String qualifiedPath) {
     String propName = prop.name.getString();
-    String setterName = "_set" + propName.substring(0, 1).toUpperCase() + propName.substring(1);
+    String setterName =
+        "_set" + propName.substring(0, 1).toUpperCase(Locale.ROOT) + propName.substring(1);
     Node fnNode = IR.function(IR.name(""), IR.paramList(IR.name(propName)), IR.block());
     compiler.reportChangeToChangeScope(fnNode);
     Node exprResNode =
         IR.exprResult(IR.assign(NodeUtil.newQName(compiler, qualifiedPath + setterName), fnNode));
 
-    JSDocInfoBuilder info = new JSDocInfoBuilder(true);
+    JSDocInfoBuilder info = JSDocInfo.builder().parseDocumentation();
     // This is overriding a generated function which was added to the interface in
     // {@code createExportsAndExterns}.
     info.recordOverride();
@@ -918,16 +1050,15 @@ final class PolymerClassRewriter {
     compiler.reportChangeToChangeScope(fnNode);
     Node varNode = IR.var(NodeUtil.newQName(compiler, interfaceName), fnNode);
 
-    JSDocInfoBuilder info = new JSDocInfoBuilder(true);
+    JSDocInfoBuilder info = JSDocInfo.builder().parseDocumentation();
     info.recordInterface();
     varNode.setJSDocInfo(info.build());
     block.addChildToBack(varNode);
     String interfaceBasePath = interfaceName + ".prototype.";
 
     if (polymerExportPolicy == PolymerExportPolicy.EXPORT_ALL) {
-      // Properties from behaviors were added to our element definition earlier.
+      appendBehaviorPropertiesToBlock(cls, block, interfaceBasePath, /*isExternsBlock*/ true);
       appendPropertiesToBlock(cls.props, block, interfaceBasePath, /* isExternsBlock= */ true);
-
       // Methods from behaviors were not already added to our element definition, so we need to
       // export those in addition to methods defined directly on the element. Note it's possible
       // and valid for two behaviors, or a behavior and an element, to implement the same method,
@@ -952,6 +1083,7 @@ final class PolymerClassRewriter {
 
     } else if (polymerVersion == 1) {
       // For Polymer 1, all declared properties are non-renameable
+      appendBehaviorPropertiesToBlock(cls, block, interfaceBasePath, /*isExternsBlock*/ true);
       appendPropertiesToBlock(cls.props, block, interfaceBasePath, /* isExternsBlock= */ true);
     } else {
       // For Polymer 2, only read-only properties and reflectToAttribute properties are
@@ -961,6 +1093,9 @@ final class PolymerClassRewriter {
       if (attributeReflectedProps != null) {
         interfaceProperties.addAll(attributeReflectedProps);
       }
+
+      // Readonly properties and attributeReflected properties for Polymer Element and its behaviors
+      // are stored together
       appendPropertiesToBlock(
           interfaceProperties, block, interfaceBasePath, /* isExternsBlock= */ true);
     }
@@ -968,11 +1103,12 @@ final class PolymerClassRewriter {
     for (MemberDefinition prop : readOnlyProps) {
       // Add all _set* functions to avoid renaming.
       String propName = prop.name.getString();
-      String setterName = "_set" + propName.substring(0, 1).toUpperCase() + propName.substring(1);
+      String setterName =
+          "_set" + propName.substring(0, 1).toUpperCase(Locale.ROOT) + propName.substring(1);
       Node setterExprNode =
           IR.exprResult(NodeUtil.newQName(compiler, interfaceBasePath + setterName));
 
-      JSDocInfoBuilder setterInfo = new JSDocInfoBuilder(true);
+      JSDocInfoBuilder setterInfo = JSDocInfo.builder().parseDocumentation();
       JSTypeExpression propType = PolymerPassStaticUtils.getTypeFromProperty(prop, compiler);
       JSTypeExpression unknown =
           new JSTypeExpression(new Node(Token.QMARK), propType.getSourceName());
@@ -1009,10 +1145,7 @@ final class PolymerClassRewriter {
     Node getprop =
         NodeUtil.newQName(
             compiler, cls.target.getQualifiedName() + ".prototype." + method.name.getString());
-    JSDocInfoBuilder info =
-        new JSDocInfoBuilder(
-            /** parseDocumentation */
-            true);
+    JSDocInfoBuilder info = JSDocInfo.builder().parseDocumentation();
     if (method.info != null) {
       // We need to preserve visibility, but other JSDoc doesn't matter (and can cause
       // re-declaration errors).
@@ -1134,7 +1267,7 @@ final class PolymerClassRewriter {
     // Reflect property calls require an instance of a type. Since we don't have one,
     // just cast an object literal to be that type. While not generally safe, it is
     // safe for property reflection.
-    JSDocInfoBuilder classTypeDoc = new JSDocInfoBuilder(false);
+    JSDocInfoBuilder classTypeDoc = JSDocInfo.builder();
     JSTypeExpression classType =
         new JSTypeExpression(
             new Node(Token.BANG, IR.string(className.getQualifiedName()))
@@ -1226,7 +1359,7 @@ final class PolymerClassRewriter {
         nextParamDelimeter = ",";
       }
 
-      if (methodParams.size() == 0) {
+      if (methodParams.isEmpty()) {
         reflectedSignature = IR.add(reflectedSignature, IR.string("()"));
       } else {
         reflectedSignature = IR.add(reflectedSignature, IR.string(")"));

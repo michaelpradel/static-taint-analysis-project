@@ -16,8 +16,10 @@
 
 package com.google.javascript.jscomp.ant;
 
+import static java.lang.Math.max;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+import com.google.common.base.Ascii;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.Files;
@@ -100,6 +102,7 @@ public final class CompileTask
   private File sourceMapOutputFile;
   private String sourceMapLocationMapping;
   private boolean applyInputSourceMaps;
+  private boolean strictModeInput;
 
   public CompileTask() {
     this.languageIn = CompilerOptions.LanguageMode.ECMASCRIPT_2015;
@@ -108,6 +111,7 @@ public final class CompileTask
     this.debugOptions = false;
     this.compilationLevel = CompilationLevel.SIMPLE_OPTIMIZATIONS;
     this.environment = CompilerOptions.Environment.BROWSER;
+    this.strictModeInput = true;
     this.manageDependencies = false;
     this.prettyPrint = false;
     this.printInputDelimiter = false;
@@ -126,25 +130,12 @@ public final class CompileTask
   }
 
   private static CompilerOptions.LanguageMode parseLanguageMode(String value) {
-    switch (value) {
-      case "ECMASCRIPT6_STRICT":
-      case "ES6_STRICT":
-      case "ECMASCRIPT6":
-      case "ES6":
-        return CompilerOptions.LanguageMode.ECMASCRIPT_2015;
-      case "ECMASCRIPT5_STRICT":
-      case "ES5_STRICT":
-        return CompilerOptions.LanguageMode.ECMASCRIPT5_STRICT;
-      case "ECMASCRIPT5":
-      case "ES5":
-        return CompilerOptions.LanguageMode.ECMASCRIPT5;
-      case "ECMASCRIPT3":
-      case "ES3":
-        return CompilerOptions.LanguageMode.ECMASCRIPT3;
-      default:
+    CompilerOptions.LanguageMode language = CompilerOptions.LanguageMode.fromString(value);
+    if (language == null) {
         throw new BuildException(
             "Unrecognized 'languageIn' option value (" + value + ")");
     }
+    return language;
   }
 
   /**
@@ -170,11 +161,11 @@ public final class CompileTask
    * @param value The warning level by string name. (default, quiet, verbose).
    */
   public void setWarning(String value) {
-    if ("default".equalsIgnoreCase(value)) {
+    if (Ascii.equalsIgnoreCase("default", value)) {
       this.warningLevel = WarningLevel.DEFAULT;
-    } else if ("quiet".equalsIgnoreCase(value)) {
+    } else if (Ascii.equalsIgnoreCase("quiet", value)) {
       this.warningLevel = WarningLevel.QUIET;
-    } else if ("verbose".equalsIgnoreCase(value)) {
+    } else if (Ascii.equalsIgnoreCase("verbose", value)) {
       this.warningLevel = WarningLevel.VERBOSE;
     } else {
       throw new BuildException(
@@ -215,16 +206,20 @@ public final class CompileTask
    *     (whitespace, simple, advanced).
    */
   public void setCompilationLevel(String value) {
-    if ("simple".equalsIgnoreCase(value)) {
+    if (Ascii.equalsIgnoreCase("simple", value)) {
       this.compilationLevel = CompilationLevel.SIMPLE_OPTIMIZATIONS;
-    } else if ("advanced".equalsIgnoreCase(value)) {
+    } else if (Ascii.equalsIgnoreCase("advanced", value)) {
       this.compilationLevel = CompilationLevel.ADVANCED_OPTIMIZATIONS;
-    } else if ("whitespace".equalsIgnoreCase(value)) {
+    } else if (Ascii.equalsIgnoreCase("whitespace", value)) {
       this.compilationLevel = CompilationLevel.WHITESPACE_ONLY;
     } else {
       throw new BuildException(
           "Unrecognized 'compilation' option value (" + value + ")");
     }
+  }
+
+  public void setStrictModeInput(boolean strictModeInput) {
+    this.strictModeInput = strictModeInput;
   }
 
   public void setManageDependencies(boolean value) {
@@ -439,6 +434,7 @@ public final class CompileTask
     }
 
     options.setEnvironment(this.environment);
+    options.setStrictModeInput(this.strictModeInput);
 
     options.setPrettyPrint(this.prettyPrint);
     options.setPrintInputDelimiter(this.printInputDelimiter);
@@ -701,9 +697,8 @@ public final class CompileTask
    */
   private boolean isStale() {
     long lastRun = outputFile.lastModified();
-    long sourcesLastModified = Math.max(
-        getLastModifiedTime(this.sourceFileLists),
-        getLastModifiedTime(this.sourcePaths));
+    long sourcesLastModified =
+        max(getLastModifiedTime(this.sourceFileLists), getLastModifiedTime(this.sourcePaths));
     long externsLastModified = getLastModifiedTime(this.externFileLists);
 
     return lastRun <= sourcesLastModified || lastRun <= externsLastModified;
@@ -728,13 +723,13 @@ public final class CompileTask
         for (String fileName : list.getFiles(this.getProject())) {
           File path = list.getDir(this.getProject());
           File file = new File(path, fileName);
-          lastModified = Math.max(getLastModifiedTime(file), lastModified);
+          lastModified = max(getLastModifiedTime(file), lastModified);
         }
       } else if (entry instanceof Path) {
         Path path = (Path) entry;
         for (String src : path.list()) {
           File file = new File(src);
-          lastModified = Math.max(getLastModifiedTime(file), lastModified);
+          lastModified = max(getLastModifiedTime(file), lastModified);
         }
       }
     }

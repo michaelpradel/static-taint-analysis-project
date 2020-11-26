@@ -18,6 +18,7 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static com.google.common.truth.Truth8.assertThat;
 import static java.util.Collections.shuffle;
 import static org.junit.Assert.fail;
 
@@ -469,7 +470,7 @@ public final class JSModuleGraphTest {
     makeDeps();
     makeGraph();
     JsonArray modules = graph.toJson();
-    assertThat(modules.size()).isEqualTo(7);
+    assertThat(modules).hasSize(7);
     for (int i = 0; i < modules.size(); i++) {
       JsonObject m = modules.get(i).getAsJsonObject();
       assertThat(m.get("name")).isNotNull();
@@ -480,7 +481,7 @@ public final class JSModuleGraphTest {
     JsonObject m = modules.get(3).getAsJsonObject();
     assertThat(m.get("name").getAsString()).isEqualTo("moduleD");
     assertThat(m.get("dependencies").getAsJsonArray().toString()).isEqualTo("[\"moduleB\"]");
-    assertThat(m.get("transitive-dependencies").getAsJsonArray().size()).isEqualTo(2);
+    assertThat(m.get("transitive-dependencies").getAsJsonArray()).hasSize(2);
     assertThat(m.get("inputs").getAsJsonArray().toString()).isEqualTo("[]");
   }
 
@@ -638,13 +639,9 @@ public final class JSModuleGraphTest {
 
     makeGraph();
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, weak2);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -669,13 +666,9 @@ public final class JSModuleGraphTest {
     makeGraph();
     graph.manageDependencies(compiler, DependencyOptions.sortOnly());
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, weak2);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -706,11 +699,10 @@ public final class JSModuleGraphTest {
 
     assertThat(
             getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
+                .map(CompilerInput::getSourceFile)
                 .collect(Collectors.toList()))
         .isEmpty();
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -749,11 +741,10 @@ public final class JSModuleGraphTest {
 
     assertThat(
             getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
+                .map(CompilerInput::getSourceFile)
                 .collect(Collectors.toList()))
         .isEmpty();
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -779,13 +770,9 @@ public final class JSModuleGraphTest {
         DependencyOptions.pruneLegacyForEntryPoints(
             ImmutableList.of(ModuleIdentifier.forFile("strong"))));
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong, moocher);
   }
 
@@ -811,8 +798,7 @@ public final class JSModuleGraphTest {
     graph.manageDependencies(compiler, DependencyOptions.sortOnly());
 
     assertThat(getWeakModule().getInputs()).isEmpty();
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, strong1, weak2, strong2);
   }
 
@@ -841,13 +827,9 @@ public final class JSModuleGraphTest {
             ImmutableList.of(
                 ModuleIdentifier.forFile("strong1"), ModuleIdentifier.forFile("strong2"))));
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, weak2);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1, strong2);
   }
 
@@ -881,13 +863,9 @@ public final class JSModuleGraphTest {
         DependencyOptions.pruneForEntryPoints(
             ImmutableList.of(ModuleIdentifier.forFile("strong1"))));
 
-    assertThat(
-            getWeakModule().getInputs().stream()
-                .map(i -> i.getSourceFile())
-                .collect(Collectors.toList()))
+    assertThat(getWeakModule().getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(weak1, weak2, weak3, strongFromWeak);
-    assertThat(
-            moduleA.getInputs().stream().map(i -> i.getSourceFile()).collect(Collectors.toList()))
+    assertThat(moduleA.getInputs().stream().map(CompilerInput::getSourceFile))
         .containsExactly(strong1);
   }
 

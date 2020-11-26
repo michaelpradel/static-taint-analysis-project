@@ -17,13 +17,17 @@
 package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Strings;
 import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.errorprone.annotations.MustBeClosed;
+import com.google.errorprone.annotations.OverridingMethodsMustInvokeSuper;
+import com.google.javascript.jscomp.colors.ColorRegistry;
 import com.google.javascript.jscomp.deps.ModuleLoader;
 import com.google.javascript.jscomp.diagnostic.LogFile;
 import com.google.javascript.jscomp.modules.ModuleMap;
@@ -56,13 +60,17 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
 
   protected Map<String, Object> annotationMap = new HashMap<>();
 
-  /** Will be called before each pass runs. */
-  abstract void beforePass(String passName);
+  private int currentPassIndex = -1;
 
-  /**
-   * Will be called after each pass finishes.
-   */
-  abstract void afterPass(String passName);
+  /** Will be called before each pass runs. */
+  @OverridingMethodsMustInvokeSuper
+  void beforePass(String passName) {
+    this.currentPassIndex++;
+  }
+
+  /** Will be called after each pass finishes. */
+  @OverridingMethodsMustInvokeSuper
+  void afterPass(String passName) {}
 
   private LifeCycleStage stage = LifeCycleStage.RAW;
 
@@ -81,7 +89,7 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
   abstract SourceFile getSourceFileByName(String sourceName);
 
   @Nullable
-  abstract Node getScriptNode(String filename);
+  public abstract Node getScriptNode(String filename);
 
   /** Gets the module graph. */
   @Nullable
@@ -122,6 +130,9 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
   /** Sets the css names found during compilation. */
   public abstract void setCssNames(Map<String, Integer> newCssNames);
 
+  /** Sets the mapping for instrumentation parameter encoding. */
+  public abstract void setInstrumentationMapping(VariableMap instrumentationMapping);
+
   /** Sets the id generator for cross-module motion. */
   public abstract void setIdGeneratorMap(String serializedIdMappings);
 
@@ -148,6 +159,12 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
   public abstract JSTypeRegistry getTypeRegistry();
 
   public abstract void clearJSTypeRegistry();
+
+  /** Gets a central registry of colors from deserialized JS types. */
+  public abstract ColorRegistry getColorRegistry();
+
+  /** Sets the color registry */
+  public abstract void setColorRegistry(ColorRegistry registry);
 
   abstract void forwardDeclareType(String typeName);
 
@@ -229,29 +246,21 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
    */
   abstract Node getNodeForCodeInsertion(@Nullable JSModule module);
 
-  /**
-   * Only used by passes in the old type checker.
-   */
   abstract TypeValidator getTypeValidator();
 
-  /**
-   * Gets the central registry of type violations.
-   */
-  abstract Iterable<TypeMismatch> getTypeMismatches();
+  /** Gets the central registry of type violations. */
+  public abstract Iterable<TypeMismatch> getTypeMismatches();
 
   /**
-   * Gets all types that are used implicitly as a
-   * matching interface type. These are
-   * recorded as TypeMismatchs only for convenience
+   * Gets all types that are used implicitly as a matching interface type. These are recorded as
+   * TypeMismatchs only for convenience
    */
-  abstract Iterable<TypeMismatch> getImplicitInterfaceUses();
+  public abstract Iterable<TypeMismatch> getImplicitInterfaceUses();
 
   abstract void setExternExports(String externExports);
 
-  /**
-   * Parses code for injecting.
-   */
-  abstract Node parseSyntheticCode(String code);
+  /** Parses code for injecting. */
+  public abstract Node parseSyntheticCode(String code);
 
   /**
    * Parses code for injecting, and associate it with a given source file.
@@ -288,10 +297,8 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
    */
   public abstract ReverseAbstractInterpreter getReverseAbstractInterpreter();
 
-  /**
-   * @return The current life-cycle stage of the AST we're working on.
-   */
-  LifeCycleStage getLifeCycleStage() {
+  /** Returns the current life-cycle stage of the AST we're working on. */
+  public LifeCycleStage getLifeCycleStage() {
     return stage;
   }
 
@@ -308,8 +315,20 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
   }
 
   /**
-   * Generates unique ids.
+   * Generates unique String Ids when requested via a compiler instance.
+   *
+   * <p>This supplier provides Ids that are deterministic and unique across all input files given to
+   * the compiler. The generated ID format is: uniqueId = "fileHashCode$counterForThisFile"
    */
+  abstract UniqueIdSupplier getUniqueIdSupplier();
+
+  /**
+   * Generates unique ids.
+   *
+   * @deprecated because the generated names during transpilation are not unique across all input
+   *     files. Use the new supplier by calling {@code getUniqueIdSupplier()}.
+   */
+  @Deprecated
   abstract Supplier<String> getUniqueNameIdSupplier();
 
   /**
@@ -427,7 +446,8 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
    */
   abstract CheckLevel getErrorLevel(JSError error);
 
-  static enum LifeCycleStage implements Serializable {
+  /** What point in optimizations we're in. For use by compiler passes */
+  public static enum LifeCycleStage implements Serializable {
     RAW,
 
     // See constraints put on the tree by Normalize.java
@@ -438,15 +458,15 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
     // coding conventions no longer apply.
     NORMALIZED_OBFUSCATED;
 
-    boolean isNormalized() {
+    public boolean isNormalized() {
       return this == NORMALIZED || this == NORMALIZED_OBFUSCATED;
     }
 
-    boolean isNormalizedUnobfuscated() {
+    public boolean isNormalizedUnobfuscated() {
       return this == NORMALIZED;
     }
 
-    boolean isNormalizedObfuscated() {
+    public boolean isNormalizedObfuscated() {
       return this == NORMALIZED_OBFUSCATED;
     }
   }
@@ -564,8 +584,8 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
   abstract void setExternProperties(Set<String> externProperties);
 
   /**
-   * Gets the names of the properties defined in externs or null if
-   * GatherExternProperties pass was not run yet.
+   * Gets the names of the properties defined in externs or null if GatherExternProperties pass was
+   * not run yet.
    */
   abstract Set<String> getExternProperties();
 
@@ -639,12 +659,20 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
 
   /**
    * Returns a new AstFactory that will add type information to the nodes it creates if and only if
-   * type type checking has already happened.
+   * type checking has already happened.
    */
   public AstFactory createAstFactory() {
     return hasTypeCheckingRun()
         ? AstFactory.createFactoryWithTypes(getTypeRegistry())
         : AstFactory.createFactoryWithoutTypes();
+  }
+
+  /**
+   * Returns a new AstFactory that will not add type information, regardless of whether type
+   * checking has already happened.
+   */
+  public AstFactory createAstFactoryWithoutTypes() {
+    return AstFactory.createFactoryWithoutTypes();
   }
 
   /**
@@ -663,15 +691,41 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
 
   public abstract void setModuleMap(ModuleMap moduleMap);
 
+  /** Provides logging access to a file with the specified name. */
   @MustBeClosed
-  public LogFile createOrReopenLog(Class<?> owner, String name) {
+  public final LogFile createOrReopenLog(
+      Class<?> owner, String firstNamePart, String... restNameParts) {
     @Nullable Path dir = getOptions().getDebugLogDirectory();
     if (dir == null) {
       return LogFile.createNoOp();
     }
 
-    Path file = Paths.get(dir.toString(), owner.getSimpleName(), name);
+    Path relativeParts = Paths.get(firstNamePart, restNameParts);
+    Path file = dir.resolve(owner.getSimpleName()).resolve(relativeParts);
     return LogFile.createOrReopen(file);
+  }
+
+  /**
+   * Provides logging access to a file with the specified name, differentiated by the index of the
+   * current pass.
+   *
+   * <p>Indexing helps in separating logs from different pass loops. The filename pattern is
+   * "[debug_log_directory]/[owner_name]/([name_part[i]]/){0,n-1}[pass_index]_[name_part[n]]".
+   */
+  @MustBeClosed
+  public final LogFile createOrReopenIndexedLog(
+      Class<?> owner, String firstNamePart, String... restNameParts) {
+    checkState(this.currentPassIndex >= 0);
+
+    String index = Strings.padStart(Integer.toString(this.currentPassIndex), 3, '0');
+    int length = restNameParts.length;
+    if (length == 0) {
+      firstNamePart = index + "_" + firstNamePart;
+    } else {
+      restNameParts[length - 1] = index + "_" + restNameParts[length - 1];
+    }
+
+    return this.createOrReopenLog(owner, firstNamePart, restNameParts);
   }
 
   /** Returns the InputId of the synthetic code input (even if it is not initialized yet). */
@@ -687,4 +741,11 @@ public abstract class AbstractCompiler implements SourceExcerptProvider, Compile
 
   /** Removes the script added by {@link #initializeSyntheticCodeInput} */
   abstract void removeSyntheticCodeInput();
+
+  /**
+   * Merges all code in the script added by {@link #initializeSyntheticCodeInput} into the first
+   * non-synthetic script. Will crash if the first non-synthetic script is a module and module
+   * rewriting has not occurred.
+   */
+  abstract void mergeSyntheticCodeInput();
 }

@@ -35,20 +35,22 @@ import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
- * Computes reaching definition for all use of each variables.
+ * Computes must-be-reaching definition for all uses of each variable.
  *
- * A definition of {@code A} in {@code A = foo()} is a reaching definition of
- * the use of {@code A} in {@code alert(A)} if all paths from entry node must
- * reaches that definition and it is the last definition before the use.
+ * <p>A definition of {@code A} in {@code A = foo()} is a must-be-reaching definition of the use of
+ * {@code A} in {@code alert(A)} if all paths from entry node to the use pass through that
+ * definition and it is the last definition before the use.
+ *
+ * <p>By definition, a must-be-reaching definition for a given use is always a single definition and
+ * it "dominates" that use (i.e. always must execute before that use).
  */
-final class MustBeReachingVariableDef extends
-    DataFlowAnalysis<Node, MustBeReachingVariableDef.MustDef> {
+final class MustBeReachingVariableDef
+    extends DataFlowAnalysis<Node, MustBeReachingVariableDef.MustDef> {
 
   // The scope of the function that we are analyzing.
   private final AbstractCompiler compiler;
   private final Set<Var> escaped;
   private final Map<String, Var> allVarsInFn;
-  private final List<Var> orderedVars;
 
   MustBeReachingVariableDef(
       ControlFlowGraph<Node> cfg,
@@ -59,7 +61,7 @@ final class MustBeReachingVariableDef extends
     this.compiler = compiler;
     this.escaped = new HashSet<>();
     this.allVarsInFn = new HashMap<>();
-    this.orderedVars = new ArrayList<>();
+    List<Var> orderedVars = new ArrayList<>();
     computeEscaped(jsScope.getParent(), escaped, compiler, scopeCreator);
     NodeUtil.getAllVarsDeclaredInFunction(
         allVarsInFn, orderedVars, compiler, scopeCreator, jsScope.getParent());
@@ -136,7 +138,7 @@ final class MustBeReachingVariableDef extends
     public MustDef(Collection<Var> vars) {
       this();
       for (Var var : vars) {
-        reachingDef.put(var, new Definition(var.scope.getRootNode()));
+        reachingDef.put(var, new Definition(var.getScope().getRootNode()));
       }
     }
 
@@ -248,12 +250,9 @@ final class MustBeReachingVariableDef extends
       case WHILE:
       case DO:
       case IF:
+      case FOR:
         computeMustDef(
             NodeUtil.getConditionExpression(n), cfgNode, output, conditional);
-        return;
-
-      case FOR:
-        computeMustDef(NodeUtil.getConditionExpression(n), cfgNode, output, conditional);
         return;
 
       case FOR_IN:
@@ -278,8 +277,18 @@ final class MustBeReachingVariableDef extends
 
       case AND:
       case OR:
+      case COALESCE:
+      case OPTCHAIN_GETPROP:
+      case OPTCHAIN_GETELEM:
         computeMustDef(n.getFirstChild(), cfgNode, output, conditional);
         computeMustDef(n.getLastChild(), cfgNode, output, true);
+        return;
+
+      case OPTCHAIN_CALL:
+        computeMustDef(n.getFirstChild(), cfgNode, output, conditional);
+        for (Node c = n.getSecondChild(); c != null; c = c.getNext()) {
+          computeMustDef(c, cfgNode, output, true);
+        }
         return;
 
       case HOOK:
@@ -336,7 +345,7 @@ final class MustBeReachingVariableDef extends
             addToDefIfLocal(
                 name.getString(), conditional ? null : cfgNode, n.getLastChild(), output);
             return;
-          } else if (NodeUtil.isGet(n.getFirstChild())) {
+          } else if (NodeUtil.isNormalGet(n.getFirstChild())) {
             // Treat all assignments to arguments as redefining the
             // parameters itself.
             Node obj = n.getFirstFirstChild();
@@ -458,11 +467,10 @@ final class MustBeReachingVariableDef extends
   }
 
   /**
-   * Gets the must reaching definition of a given node.
+   * Gets the must-be-reaching definition of a given use node.
    *
-   * @param name name of the variable. It can only be names of local variable
-   *     that are not function parameters, escaped variables or variables
-   *     declared in catch.
+   * @param name name of the variable. It can only be names of local variable that are not function
+   *     parameters, escaped variables or variables declared in catch.
    * @param useNode the location of the use where the definition reaches.
    */
   Definition getDef(String name, Node useNode) {
@@ -484,7 +492,7 @@ final class MustBeReachingVariableDef extends
 
     for (Var s : def.depends) {
       // Don't inline try catch
-      if (s.scope.isCatchScope()) {
+      if (s.getScope().isCatchScope()) {
         return true;
       }
     }

@@ -33,7 +33,6 @@ import org.junit.runners.JUnit4;
 /**
  * Tests for {@link InferJSDocInfo}.
  *
- * @author nicksantos@google.com (Nick Santos)
  */
 // TODO(nicksantos): A lot of this code is duplicated from
 // TypedScopeCreatorTest. We should create a common test harness for
@@ -72,11 +71,9 @@ public final class InferJSDocInfoTest extends CompilerTestCase {
       @Override
       public void process(Node externs, Node root) {
         TypedScopeCreator scopeCreator = new TypedScopeCreator(compiler);
-        TypedScope topScope = scopeCreator.createScope(root.getParent(), null);
 
-        new TypeInferencePass(
-                compiler, compiler.getReverseAbstractInterpreter(), topScope, scopeCreator)
-            .process(externs, root);
+        new TypeInferencePass(compiler, compiler.getReverseAbstractInterpreter(), scopeCreator)
+            .inferAllScopes(root.getParent());
 
         new InferJSDocInfo(compiler).process(externs, root);
       }

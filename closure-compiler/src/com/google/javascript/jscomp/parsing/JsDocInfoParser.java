@@ -175,7 +175,10 @@ public final class JsDocInfoParser {
     this.stream = stream;
 
     boolean parseDocumentation = config.jsDocParsingMode().shouldParseDescriptions();
-    this.jsdocBuilder = new JSDocInfoBuilder(parseDocumentation);
+    this.jsdocBuilder = JSDocInfo.builder();
+    if (parseDocumentation) {
+      this.jsdocBuilder.parseDocumentation();
+    }
     if (comment != null) {
       this.jsdocBuilder.recordOriginalCommentString(comment);
       this.jsdocBuilder.recordOriginalCommentPosition(commentPosition);
@@ -258,11 +261,8 @@ public final class JsDocInfoParser {
             .setStrictMode(Config.StrictMode.SLOPPY)
             .setClosurePrimitiveNames(ImmutableSet.of("testPrimitive"))
             .build();
-    JsDocInfoParser parser =
-        new JsDocInfoParser(
-            new JsDocTokenStream(toParse), toParse, 0, null, config, ErrorReporter.NULL_INSTANCE);
-
-    return parser;
+    return new JsDocInfoParser(
+        new JsDocTokenStream(toParse), toParse, 0, null, config, ErrorReporter.NULL_INSTANCE);
   }
 
   /**
@@ -673,6 +673,15 @@ public final class JsDocInfoParser {
           token = meaningInfo.token;
           if (!jsdocBuilder.recordMeaning(meaning)) {
             addParserWarning("msg.jsdoc.meaning.extra");
+          }
+          return token;
+
+        case ALTERNATE_MESSAGE_ID:
+          ExtractionInfo alternateMessageIdInfo = extractSingleLineBlock();
+          String alternateMessageId = alternateMessageIdInfo.string;
+          token = alternateMessageIdInfo.token;
+          if (!jsdocBuilder.recordAlternateMessageId(alternateMessageId)) {
+            addParserWarning("msg.jsdoc.alternateMessageId.extra");
           }
           return token;
 
@@ -2192,18 +2201,27 @@ public final class JsDocInfoParser {
       return null;
     }
 
+    final int startLineno = stream.getLineno();
+    final int startCharno = stream.getCharno();
+    final int startOffset = stream.getCursor() - stream.getString().length();
+
     String typeName = stream.getString();
-    int lineno = stream.getLineno();
-    int charno = stream.getCharno();
+    int endOffset = stream.getCursor();
     while (match(JsDocToken.EOL) && typeName.endsWith(".")) {
       skipEOLs();
       if (match(JsDocToken.STRING)) {
         next();
+        endOffset = stream.getCursor();
         typeName += stream.getString();
       }
     }
 
-    return newStringNode(typeName, lineno, charno);
+    // What we're doing by concatenating these tokens is really hacky. We want that to be obvious.
+    Node str = newStringNode(typeName);
+    str.setLineno(startLineno);
+    str.setCharno(startCharno);
+    str.setLength(endOffset - startOffset);
+    return str;
   }
 
   /**
@@ -2237,8 +2255,16 @@ public final class JsDocInfoParser {
 
   /** TypeofType := 'typeof' NameExpression | 'typeof' '(' NameExpression ')' */
   private Node parseTypeofType(JsDocToken token) {
+    if (token == JsDocToken.LEFT_CURLY) {
+      return reportTypeSyntaxWarning("msg.jsdoc.unnecessary.braces");
+    }
+
     Node typeofType = newNode(Token.TYPEOF);
     Node name = parseNameExpression(token);
+    if (name == null) {
+      return null;
+    }
+
     skipEOLs();
     typeofType.addChildToFront(name);
     return typeofType;
@@ -2618,11 +2644,7 @@ public final class JsDocInfoParser {
   }
 
   private Node newStringNode(String s) {
-    return newStringNode(s, stream.getLineno(), stream.getCharno());
-  }
-
-  private Node newStringNode(String s, int lineno, int charno) {
-    Node n = Node.newString(s, lineno, charno).clonePropsFrom(templateNode);
+    Node n = Node.newString(s, stream.getLineno(), stream.getCharno()).clonePropsFrom(templateNode);
     n.setLength(s.length());
     return n;
   }

@@ -15,14 +15,10 @@
  */
 package com.google.javascript.refactoring.examples;
 
-import static com.google.javascript.refactoring.testing.RefasterJsTestUtils.assertFileRefactoring;
-
-import com.google.common.collect.ImmutableList;
-
+import com.google.javascript.refactoring.testing.RefasterJsTestCase;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
 
 @RunWith(JUnit4.class)
 public class SetLocationTest {
@@ -34,31 +30,29 @@ public class SetLocationTest {
 
   /** The RefasterJs template to use for Location#href. */
   private static final String SET_LOCATION_HREF_TEMPLATE =
-      "src/" +
       "com/google/javascript/refactoring/examples/refasterjs/set_location_href.js";
 
   /** The RefasterJs template to use for Window#location. */
   private static final String SET_WINDOW_LOCATION_TEMPLATE =
-      "src/" +
       "com/google/javascript/refactoring/examples/refasterjs/set_window_location.js";
 
   @Test
   public void testLocationHref() throws Exception {
-    assertFileRefactoring(
-        SET_LOCATION_HREF_TEMPLATE,
-        TESTDATA_DIR,
-        "set_location_href_test_in.js",
-        ImmutableList.of("goog_base.js"),
-        "set_location_href_test_out.js");
+    RefasterJsTestCase.builder()
+        .setTemplatePath(SET_LOCATION_HREF_TEMPLATE)
+        .setInputPath(TESTDATA_DIR + "/set_location_href_test_in.js")
+        .addExpectedOutputPath(TESTDATA_DIR + "/set_location_href_test_out.js")
+        .addAdditionalSourcePath(TESTDATA_DIR + "/goog_base.js")
+        .test();
   }
 
   @Test
   public void testWindowLocation() throws Exception {
-    assertFileRefactoring(
-        SET_WINDOW_LOCATION_TEMPLATE,
-        TESTDATA_DIR,
-        "set_window_location_test_in.js",
-        ImmutableList.of("goog_base.js"),
-        "set_window_location_test_out.js");
+    RefasterJsTestCase.builder()
+        .setTemplatePath(SET_WINDOW_LOCATION_TEMPLATE)
+        .setInputPath(TESTDATA_DIR + "/set_window_location_test_in.js")
+        .addExpectedOutputPath(TESTDATA_DIR + "/set_window_location_test_out.js")
+        .addAdditionalSourcePath(TESTDATA_DIR + "/goog_base.js")
+        .test();
   }
 }

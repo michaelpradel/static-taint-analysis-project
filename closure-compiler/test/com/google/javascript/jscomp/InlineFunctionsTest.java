@@ -17,6 +17,7 @@
 package com.google.javascript.jscomp;
 
 import com.google.javascript.jscomp.CompilerOptions.Reach;
+import com.google.javascript.jscomp.testing.JSChunkGraphBuilder;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -25,9 +26,7 @@ import org.junit.runners.JUnit4;
 /**
  * Inline function tests.
  *
- * @author johnlenz@google.com (john lenz)
  */
-
 @RunWith(JUnit4.class)
 public class InlineFunctionsTest extends CompilerTestCase {
   private Reach inliningReach;
@@ -86,6 +85,35 @@ public class InlineFunctionsTest extends CompilerTestCase {
   public void testNoInline() {
     testSame("/** @noinline */ function foo(){} foo();foo();foo();");
     testSame("/** @noinline */ var foo = function(){}; foo();foo();foo();");
+    testSame("/** @noinline */ var foo = function(){}; foo?.();foo?.();foo?.();");
+  }
+
+  @Test
+  public void testNullableFunctionsNotInlined() {
+    testSame("var foo = null; if(x) { foo = function(){}; }; foo();foo();foo();");
+    testSame("var foo = null; if(x) { foo = function(){}; }; foo?.();foo?.();foo?.();");
+
+    // Even when non-null, we don't inline if there are multiple definitions of a function (need
+    // Dataflow Analysis for that).
+    testSame(
+        lines(
+            "var foo = function() {return 1;}; if(x) { foo = function(){}; };",
+            " foo?.();foo?.();foo?.();"));
+  }
+
+  @Test
+  public void testInlinedAtRegularAndOptionalCallsBoth() {
+    // both regular and optional references are found and inlined
+    test("function foo() {return 1;} foo(); foo?.();", "1;1;");
+  }
+
+  @Test
+  public void testQualifiedNamesNotInlined() {
+    testSame(lines("var a = { b :  function() {return 0;} };", "var c = a.b();"));
+
+    testSame(lines("var a = { b :  function() {return 0;} };", "var c = a.b?.();"));
+
+    testSame(lines("var a = { b :  function() {return 0;} };", "var c = a?.b();"));
   }
 
   @Test
@@ -97,9 +125,20 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testInlineEmptyFunction1_optionalChaining() {
+    // Empty function, no params.
+    test("function foo(){} foo?.();", "void 0;");
+  }
+
+  @Test
   public void testInlineEmptyFunction2() {
     // Empty function, params with no side-effects.
     test("function foo(){}\n foo(1, new Date, function(){});", "void 0;");
+  }
+
+  @Test
+  public void testInlineEmptyFunction2_optionalChaining() {
+    test("function foo(){}\n foo?.(1, new Date, function(){});", "void 0;");
   }
 
   @Test
@@ -115,9 +154,28 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testInlineEmptyFunction4_optionalChainingCall() {
+    // Empty function, params with side-effects forces block inlining.
+    test(
+        "function foo(){}\n foo?.(x());",
+        lines(
+            "var JSCompiler_inline_result$jscomp$0;",
+            "{",
+            "  var JSCompiler_inline_anon_param_1 = x();",
+            "  JSCompiler_inline_result$jscomp$0 = void 0;",
+            "}",
+            "JSCompiler_inline_result$jscomp$0;"));
+  }
+
+  @Test
   public void testInlineEmptyFunction6() {
     test("if (window) { f(); function f() {} }",
         "if (window) { void 0; }");
+  }
+
+  @Test
+  public void testInlineEmptyFunction6_optionalChaining() {
+    test("if (window) { f?.(); function f() {} }", "if (window) { void 0; }");
   }
 
   @Test
@@ -126,6 +184,12 @@ public class InlineFunctionsTest extends CompilerTestCase {
     test("function foo(){ return 4 }" +
         "foo();",
         "4");
+  }
+
+  @Test
+  public void testInlineFunctions1_optionalChaining() {
+    // As simple a test as we can get.
+    test(lines("function foo(){ return 4 }", "foo?.();"), "4");
   }
 
   @Test
@@ -139,12 +203,32 @@ public class InlineFunctionsTest extends CompilerTestCase {
          );
   }
 
+  // calls present in the args list of an optional chaining call get inlined.
+  @Test
+  public void testInline_simpleConstantsUnderOptionalChaining() {
+    // inline simple constants
+    test(
+        lines("var AB=function(){return 4};", "function BC(x){ return x;}", "y=BC?.(AB());"),
+        "y = 4;");
+  }
+
   @Test
   public void testInlineFunctions3() {
     // inline simple constants
     test("var t;var AB=function(){return 4};" +
         "function BC(){return 6;}" +
         "var CD=function(x){return x + 5};x=CD(3);y=AB();z=BC();",
+        "var t;x=3+5;y=4;z=6");
+  }
+
+  @Test
+  public void testInlineFunctions3_optionalChaining() {
+    // inline simple constants
+    test(
+        lines(
+            "var t;var AB=function(){return 4};",
+            "function BC(){return 6;}",
+            "var CD=function(x){return x + 5};x=CD?.(3);y=AB?.();z=BC?.();"),
         "var t;x=3+5;y=4;z=6");
   }
 
@@ -160,12 +244,34 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testInlineFunctions4_optionalChaining() {
+    // don't inline if there are multiple definitions (need DFA for that).
+    test(
+        lines(
+            "var t; var AB = function() { return 4 }; ",
+            "function BC() { return 6; }",
+            "CD = 0;",
+            "CD = function(x) { return x + 5 }; x = CD?.(3); y = AB?.(); z = BC?.();"),
+        "var t;CD=0;CD=function(x){return x+5};x=CD?.(3);y=4;z=6");
+  }
+
+  @Test
   public void testInlineFunctions5() {
     // inline additions
     test("var FOO_FN=function(x,y) { return \"de\" + x + \"nu\" + y };" +
          "var a = FOO_FN(\"ez\", \"ts\")",
 
          "var a=\"de\"+\"ez\"+\"nu\"+\"ts\"");
+  }
+
+  @Test
+  public void testInlineFunctions5_optionalChaining() {
+    // inline additions
+    test(
+        lines(
+            "var FOO_FN=function(x,y) { return \"de\" + x + \"nu\" + y };",
+            "var a = FOO_FN?.(\"ez\", \"ts\")"),
+        "var a=\"de\"+\"ez\"+\"nu\"+\"ts\"");
   }
 
   @Test
@@ -178,12 +284,28 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testInlineFunctions6_optionalChaining() {
+    // more complex inlines
+    test(
+        lines(
+            "function BAR_FN(x, y, z) { return z?.(nochg?.(x + y)) }",
+            "alert(BAR_FN?.(1, 2, baz))"),
+        "alert(baz?.(nochg?.(1+2)))");
+  }
+
+  @Test
   public void testInlineFunctions7() {
     // inlines appearing multiple times
     test("function FN(x,y,z){return x+x+y}" +
          "var b=FN(1,2,3)",
 
          "var b=1+1+2");
+  }
+
+  @Test
+  public void testInlineFunctions7_optionalChaining() {
+    // inlines appearing multiple times
+    test(lines("function FN(x,y,z){return x+x+y}", "var b=FN?.(1,2,3)"), "var b=1+1+2");
   }
 
   @Test
@@ -202,6 +324,14 @@ public class InlineFunctionsTest extends CompilerTestCase {
          "var y=INC(i)",
          "var y;{var x$jscomp$inline_0=i;" +
          "y=x$jscomp$inline_0++}");
+  }
+
+  @Test
+  public void testInlineFunctions9_optionalChaining() {
+    // don't inline if the input parameter is modified.
+    test(
+        "function INC(x){return x++} var y=INC?.(i)",
+        "var y;{var x$jscomp$inline_0=i; y=x$jscomp$inline_0++}");
   }
 
   @Test
@@ -396,6 +526,18 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testInlineFunctions19_optionalChaining() {
+    // TRICKY ... test nested inlines
+    // with block inlining possible
+    test(
+        lines(
+            "function foo(a, b){return a+b}",
+            "function bar(d){return c}",
+            "var d=foo?.(bar?.(1),e)"),
+        "var d=c+e;");
+  }
+
+  @Test
   public void testInlineFunctions21() {
     // with block inlining possible
     test("function foo(a, b){return a+b}" +
@@ -565,6 +707,30 @@ public class InlineFunctionsTest extends CompilerTestCase {
             ""));
   }
 
+  @Test
+  public void testInlineFunctions34_optionalChaining() {
+    test(
+        lines(
+            "class X {}",
+            "(function(e) {",
+            "  for (var el = f?.(e.target); el != null; el = el.parent) {}",
+            "  function f(x) { return x instanceof X ? x : null; }",
+            "})({target:{}});",
+            ""),
+        lines(
+            "class X {}",
+            "{",
+            "  var e$jscomp$inline_0 = {target:{}};",
+            "  var el$jscomp$inline_1;",
+            "  {",
+            "    var x$jscomp$inline_2 = e$jscomp$inline_0.target;",
+            "    el$jscomp$inline_1 = x$jscomp$inline_2 instanceof X ? x$jscomp$inline_2 : null;",
+            "  }",
+            "  for(;el$jscomp$inline_1 != null; el$jscomp$inline_1 = el$jscomp$inline_1.parent);",
+            "}",
+            ""));
+  }
+
   // Same as above, except the for loop uses a let instead of a var. See b/73373371.
   @Test
   public void testInlineFunctions35() {
@@ -573,6 +739,34 @@ public class InlineFunctionsTest extends CompilerTestCase {
             "class X {}",
             "(function(e) {",
             "  for (let el = f(e.target); el != null; el = el.parent) {}",
+            "  function f(x) { return x instanceof X ? x : null; }",
+            "})({target:{}});",
+            ""),
+        lines(
+            "class X {}",
+            "{",
+            "  var e$jscomp$inline_0 = {target: {}};",
+            "  var JSCompiler_inline_result$jscomp$inline_1;",
+            "  {",
+            "    var x$jscomp$inline_2 = e$jscomp$inline_0.target;",
+            "    JSCompiler_inline_result$jscomp$inline_1 =",
+            "        x$jscomp$inline_2 instanceof X ? x$jscomp$inline_2 : null",
+            "  }",
+            "  for (let el$jscomp$inline_3 = JSCompiler_inline_result$jscomp$inline_1;",
+            "       el$jscomp$inline_3 != null;",
+            "       el$jscomp$inline_3 = el$jscomp$inline_3.parent) {}",
+            "}",
+            ""));
+  }
+
+  @Test
+  public void testInlineFunctions35_optionalChaining() {
+    test(
+        lines(
+            "class X {}",
+            "(function(e) {",
+            // The for loop uses a `let` instead of a var.
+            "  for (let el = f?.(e.target); el != null; el = el.parent) {}",
             "  function f(x) { return x instanceof X ? x : null; }",
             "})({target:{}});",
             ""),
@@ -627,11 +821,40 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testMixedModeInlining2_optionalChaining() {
+    // Base line tests, block inlining. Block inlining is needed by possible-side-effect parameter.
+    test(
+        "function foo(){return 1} foo?.(x());",
+        lines(
+            "var JSCompiler_inline_result$jscomp$0;",
+            "{",
+            "  var JSCompiler_inline_anon_param_1 = x();",
+            "  JSCompiler_inline_result$jscomp$0 = 1;",
+            "}",
+            "JSCompiler_inline_result$jscomp$0;"));
+  }
+
+  @Test
   public void testMixedModeInlining3() {
     // Inline using both modes.
     test(
         "function foo(){return 1} foo();foo(x());",
         "1;{var JSCompiler_inline_anon_param_0=x();1}");
+  }
+
+  @Test
+  public void testMixedModeInlining3_optionalChaining() {
+    // Inline using both modes.
+    test(
+        "function foo(){return 1} foo?.();foo?.(x?.());",
+        lines(
+            "1;",
+            "var JSCompiler_inline_result$jscomp$0;",
+            "{",
+            "  var JSCompiler_inline_anon_param_1 = x?.();",
+            "  JSCompiler_inline_result$jscomp$0 = 1;",
+            "}",
+            "JSCompiler_inline_result$jscomp$0;"));
   }
 
   @Test
@@ -2265,6 +2488,11 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
+  public void testLocalFunctionInlining4_optionalChaining() {
+    test("function _f(){ function g() {return 1} return g?.() }", "function _f(){ return 1 }");
+  }
+
+  @Test
   public void testLocalFunctionInlining5() {
     testSame("function _f(){ function g() {this;} g() }");
   }
@@ -2784,79 +3012,71 @@ public class InlineFunctionsTest extends CompilerTestCase {
   // Inline a single reference function into deeper modules
   @Test
   public void testCrossModuleInlining1() {
-    test(createModuleChain(
-             // m1
-             "function foo(){return f(1)+g(2)+h(3);}",
-             // m2
-             "foo()"
-             ),
-         new String[] {
-             // m1
-             "",
-             // m2
-             "f(1)+g(2)+h(3);"
-            }
-        );
+    test(
+        JSChunkGraphBuilder.forChain()
+            // m1
+            .addChunk("function foo(){return f(1)+g(2)+h(3);}")
+            // m2
+            .addChunk("foo()")
+            .build(),
+        new String[] {
+          // m1
+          "",
+          // m2
+          "f(1)+g(2)+h(3);"
+        });
   }
 
   // Inline a single reference function into shallow modules, only if it
   // is cheaper than the call itself.
   @Test
   public void testCrossModuleInlining2() {
-    testSame(createModuleChain(
-                // m1
-                "foo()",
-                // m2
-                "function foo(){return f(1)+g(2)+h(3);}"
-                )
-            );
+    testSame(
+        JSChunkGraphBuilder.forChain()
+            .addChunk("foo()")
+            .addChunk("function foo(){return f(1)+g(2)+h(3);}")
+            .build());
 
-    test(createModuleChain(
-             // m1
-             "foo()",
-             // m2
-             "function foo(){return f();}"
-             ),
-         new String[] {
-             // m1
-             "f();",
-             // m2
-             ""
-            }
-        );
+    test(
+        JSChunkGraphBuilder.forChain()
+            // m1
+            .addChunk("foo()")
+            // m2
+            .addChunk("function foo(){return f();}")
+            .build(),
+        new String[] {
+          // m1
+          "f();",
+          // m2
+          ""
+        });
   }
 
   // Inline a multi-reference functions into shallow modules, only if it
   // is cheaper than the call itself.
   @Test
   public void testCrossModuleInlining3() {
-    testSame(createModuleChain(
-                // m1
-                "foo()",
-                // m2
-                "function foo(){return f(1)+g(2)+h(3);}",
-                // m3
-                "foo()"
-                )
-            );
+    testSame(
+        JSChunkGraphBuilder.forChain()
+            .addChunk("foo()")
+            .addChunk("function foo(){return f(1)+g(2)+h(3);}")
+            .addChunk("foo()")
+            .build());
 
-    test(createModuleChain(
-             // m1
-             "foo()",
-             // m2
-             "function foo(){return f();}",
-             // m3
-             "foo()"
-             ),
-         new String[] {
-             // m1
-             "f();",
-             // m2
-             "",
-             // m3
-             "f();"
-            }
-         );
+    test(
+        JSChunkGraphBuilder.forChain()
+            .addChunk("foo()")
+            .addChunk("function foo(){return f();}")
+            .addChunk("foo()")
+            .build(),
+        new String[] {
+          // m1
+          "f();",
+          // m2
+          "",
+          // m3
+          "f();"
+        });
   }
 
   @Test
@@ -3562,6 +3782,12 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
+  public void
+      testSpreadCall_withArrayLiteral_isNotInlined_andFunctionIsPreserved_optionalChaining() {
+    testSame(lines("function foo(x, y) {", "  return x + y;", "}", "foo?.(...[0, 1]);"));
+  }
+
+  @Test
   public void testSpreadCall_withMultipleSpreads_isNotInlined_andFunctionIsPreserved() {
     testSame(
         lines(
@@ -3677,15 +3903,80 @@ public class InlineFunctionsTest extends CompilerTestCase {
   }
 
   @Test
-  public void methodCallCannotBeDecomposed() {
-    testSame(
+  public void
+      testSpreadCall_withBlockInlinableFunction_withPrecedingSpreadArg_isInlined_optionalChaining() {
+    test(
+        lines(
+            "function foo(x) {", //
+            "  qux?.();", // Something with a side-effect.
+            "  return x;",
+            "}",
+            "",
+            "bar?.(...zap?.(), foo?.(arg));"),
+        lines(
+            "let JSCompiler_temp_const$jscomp$0;",
+            // Optional call to `bar` gets decomposed to if- else.
+            "if ((JSCompiler_temp_const$jscomp$0 = bar) == null) {",
+            "  void 0;",
+            "} else {",
+            "  var JSCompiler_temp_const$jscomp$2 = [...zap?.()];",
+            "  var JSCompiler_inline_result$jscomp$3;",
+            "  {",
+            "    qux?.();",
+            "    JSCompiler_inline_result$jscomp$3 = arg;",
+            "  }",
+            "  JSCompiler_temp_const$jscomp$0(...JSCompiler_temp_const$jscomp$2,",
+            " JSCompiler_inline_result$jscomp$3);",
+            "}"));
+  }
+
+  @Test
+  public void methodCallIsDecomposed() {
+    test(
         lines(
             "function foo(x) {", //
             "  qux();", // Something with a side-effect.
             "  return x;",
             "}",
             "",
-            "bar.method(foo(arg));"));
+            "bar.method(foo(arg));"),
+        lines(
+            "var JSCompiler_temp_const$jscomp$1 = bar;",
+            "var JSCompiler_temp_const$jscomp$0 = JSCompiler_temp_const$jscomp$1.method;",
+            "var JSCompiler_inline_result$jscomp$2;",
+            "{",
+            "  var x$jscomp$inline_3 = arg;",
+            "  qux();",
+            "  JSCompiler_inline_result$jscomp$2 = x$jscomp$inline_3;",
+            " }",
+            "JSCompiler_temp_const$jscomp$0.call(JSCompiler_temp_const$jscomp$1,",
+            " JSCompiler_inline_result$jscomp$2);"));
+  }
+
+  @Test
+  public void methodCallWithNestedCallIsInlined() {
+    this.assumeStrictThis = true;
+    test(
+        lines(
+            "function foo(x) {", //
+            "  qux();", // Something with a side-effect.
+            "  return x;",
+            "}",
+            "",
+            "function bar(x) {",
+            "  return x;",
+            "}",
+            "bar.call(null, foo(arg));"),
+        lines(
+            "var JSCompiler_inline_result$jscomp$0;",
+            "{",
+            "  var x$jscomp$inline_1 = arg;",
+            "  qux();",
+            "  JSCompiler_inline_result$jscomp$0 = x$jscomp$inline_1;",
+            "}",
+            "{",
+            "  JSCompiler_inline_result$jscomp$0;",
+            "}"));
   }
 
   @Test

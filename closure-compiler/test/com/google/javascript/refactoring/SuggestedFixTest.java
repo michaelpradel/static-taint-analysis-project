@@ -17,7 +17,6 @@
 package com.google.javascript.refactoring;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.javascript.refactoring.SuggestedFix.getShortNameForRequire;
 import static com.google.javascript.refactoring.testing.SuggestedFixes.assertChanges;
 import static com.google.javascript.refactoring.testing.SuggestedFixes.assertReplacement;
 import static org.junit.Assert.assertEquals;
@@ -40,7 +39,6 @@ import org.junit.runners.JUnit4;
 /**
  * Unit tests for JsFlume {@link SuggestedFix}.
  *
- * @author mknichel@google.com (Mark Knichel)
  */
 @RunWith(JUnit4.class)
 public class SuggestedFixTest {
@@ -1047,9 +1045,30 @@ public class SuggestedFixTest {
     Compiler compiler = getCompiler(input);
     Node root = compileToScriptRoot(compiler);
     Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
-    SuggestedFix fix = new SuggestedFix.Builder()
-        .addGoogRequire(match, "abc.def")
-        .build();
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequire(match, "abc.def", scriptMetadata).build();
+    SetMultimap<String, CodeReplacement> replacementMap = fix.getReplacements();
+    assertThat(replacementMap).isEmpty();
+  }
+
+  @Test
+  public void testAddGoogRequire_requireTypeAlreadyExists() {
+    String input =
+        lines(
+            "goog.provide('js.Foo');",
+            "goog.requireType('abc.def');",
+            "",
+            "/** @private */",
+            "function foo_() {};");
+    Compiler compiler = getCompiler(input);
+    Node root = compileToScriptRoot(compiler);
+    Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequire(match, "abc.def", scriptMetadata).build();
     SetMultimap<String, CodeReplacement> replacementMap = fix.getReplacements();
     assertThat(replacementMap).isEmpty();
   }
@@ -1074,7 +1093,65 @@ public class SuggestedFixTest {
     Compiler compiler = getCompiler(input);
     Node root = compileToScriptRoot(compiler);
     Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
-    SuggestedFix fix = new SuggestedFix.Builder().addGoogRequire(match, "goog.safe").build();
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequire(match, "goog.safe", scriptMetadata).build();
+    assertChanges(fix, "", input, expected);
+  }
+
+  @Test
+  public void testAddRequireTypeModule() {
+    String input =
+        lines(
+            "goog.module('js.Foo');", //
+            "",
+            "/** @private */",
+            "function foo_() {",
+            "}");
+    String expected =
+        lines(
+            "goog.module('js.Foo');",
+            "const Bar = goog.requireType('b.Bar');",
+            "",
+            "/** @private */",
+            "function foo_() {",
+            "}");
+    Compiler compiler = getCompiler(input);
+    Node root = compileToScriptRoot(compiler);
+    Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequireType(match, "b.Bar", scriptMetadata).build();
+    assertChanges(fix, "", input, expected);
+  }
+
+  @Test
+  public void testAddRequireModule_requireTypeAlreadyExists() {
+    String input =
+        lines(
+            "goog.module('js.Foo');", //
+            "goog.requireType('goog.safe');",
+            "",
+            "/** @private */",
+            "function foo_() {",
+            "}");
+    String expected =
+        lines(
+            "goog.module('js.Foo');",
+            "const safe = goog.requireType('goog.safe');",
+            "",
+            "/** @private */",
+            "function foo_() {",
+            "}");
+    Compiler compiler = getCompiler(input);
+    Node root = compileToScriptRoot(compiler);
+    Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequire(match, "goog.safe", scriptMetadata).build();
     assertChanges(fix, "", input, expected);
   }
 
@@ -1096,7 +1173,10 @@ public class SuggestedFixTest {
     Compiler compiler = getCompiler(input);
     Node root = compileToScriptRoot(compiler);
     Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
-    SuggestedFix fix = new SuggestedFix.Builder().addGoogRequire(match, "goog.safe").build();
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequire(match, "goog.safe", scriptMetadata).build();
     assertChanges(fix, "", input, expected);
   }
 
@@ -1120,7 +1200,10 @@ public class SuggestedFixTest {
     Compiler compiler = getCompiler(input);
     Node root = compileToScriptRoot(compiler);
     Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
-    SuggestedFix fix = new SuggestedFix.Builder().addGoogRequire(match, "goog.safe").build();
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequire(match, "goog.safe", scriptMetadata).build();
     assertChanges(fix, "", input, expected);
   }
 
@@ -1136,7 +1219,10 @@ public class SuggestedFixTest {
     Compiler compiler = getCompiler(input);
     Node root = compileToScriptRoot(compiler);
     Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
-    SuggestedFix fix = new SuggestedFix.Builder().addGoogRequire(match, "goog.safe").build();
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequire(match, "goog.safe", scriptMetadata).build();
     assertThat(fix.getReplacements()).isEmpty();
   }
 
@@ -1152,8 +1238,10 @@ public class SuggestedFixTest {
     Compiler compiler = getCompiler(input);
     Node root = compileToScriptRoot(compiler);
     Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
-    SuggestedFix.Builder fixBuilder = new SuggestedFix.Builder().addGoogRequire(match, "goog.safe");
-    assertThat(fixBuilder.getRequireName(match, "goog.safe")).isEqualTo("googSafe");
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix.Builder fixBuilder =
+        new SuggestedFix.Builder().addGoogRequire(match, "goog.safe", scriptMetadata);
     assertThat(fixBuilder.build().getReplacements()).isEmpty();
   }
 
@@ -1161,9 +1249,10 @@ public class SuggestedFixTest {
     Compiler compiler = getCompiler(before + after);
     Node root = compileToScriptRoot(compiler);
     Match match = new Match(root.getFirstChild(), new NodeMetadata(compiler));
-    SuggestedFix fix = new SuggestedFix.Builder()
-        .addGoogRequire(match, namespace)
-        .build();
+    ScriptMetadata scriptMetadata = ScriptMetadata.create(root, compiler);
+
+    SuggestedFix fix =
+        new SuggestedFix.Builder().addGoogRequire(match, namespace, scriptMetadata).build();
     CodeReplacement replacement =
         CodeReplacement.create(
             before.length(), 0, "goog.require('" + namespace + "');\n", namespace);
@@ -1300,17 +1389,6 @@ public class SuggestedFixTest {
         options);
     compiler.parse();
     return compiler;
-  }
-
-  @Test
-  public void testShortName() {
-    assertThat(getShortNameForRequire("goog.array")).isEqualTo("googArray");
-    assertThat(getShortNameForRequire("goog.string")).isEqualTo("googString");
-    assertThat(getShortNameForRequire("goog.object")).isEqualTo("googObject");
-    assertThat(getShortNameForRequire("goog.structs.Map")).isEqualTo("StructsMap");
-
-    assertThat(getShortNameForRequire("array")).isEqualTo("array");
-    assertThat(getShortNameForRequire("Array")).isEqualTo("Array");
   }
 
   private String lines(String... lines) {

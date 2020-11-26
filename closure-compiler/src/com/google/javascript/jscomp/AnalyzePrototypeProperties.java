@@ -249,22 +249,53 @@ class AnalyzePrototypeProperties implements CompilerPass {
     @Override
     public void visit(NodeTraversal t, Node n, Node parent) {
       switch (n.getToken()) {
+        case SUPER:
+          // Example:
+          // class X extends Y {
+          //   method() {
+          //     return () => super.x;
+          //   }
+          // }
+          // Names associated with the arrow function, the method body, and the method itself
+          // should be marked as referencing super, but not the class definition or anything
+          // containing it.
+          for (NameContext context : symbolStack) {
+            context.name.referencesSuper = true;
+            if (NodeUtil.isMethodDeclaration(context.scope.getRootNode())) {
+              break;
+            }
+          }
+          break;
+
+        case OPTCHAIN_GETPROP:
+          addSymbolUse(n.getSecondChild().getString(), t.getModule(), PROPERTY);
+          break;
+
         case GETPROP:
           String propName = n.getSecondChild().getString();
 
           if (n.isQualifiedName()) {
             if (propName.equals("prototype")) {
-              if (processPrototypeRef(t, n)) {
+              if (handlePossibleAssignmentToPrototype(t, n)) {
+                // The reference is being assigned to not read from, so don't record this as a
+                // reference.
                 return;
               }
             } else if (compiler.getCodingConvention().isExported(propName)) {
+              // TODO(bradfordcsmith): We don't seem to have any tests that cover this case.
+              // This class has no unit tests of its own and it is only used by
+              // CrossChunkMethodMotion.
               addGlobalUseOfSymbol(propName, t.getModule(), PROPERTY);
               return;
             } else {
-              // Do not mark prototype prop assigns as a 'use' in the global scope.
               if (parent.isAssign() && n == parent.getFirstChild()) {
                 String rValueName = getPrototypePropertyNameFromRValue(n);
                 if (rValueName != null) {
+                  // e.g. `Foo.prototype.bar = something`
+                  // We record the declaration of `bar` when we look at the `Foo.prototype`
+                  // Node via the call to handlePossibleAssignmentToPrototype() above.
+                  // Now that we're looking at the whole `Foo.prototype.bar` node,
+                  // we just need to make sure we don't record it as a read reference.
                   return;
                 }
               }
@@ -468,12 +499,17 @@ class AnalyzePrototypeProperties implements CompilerPass {
     }
 
     /**
-     * Processes the GETPROP of prototype, which can either be under another GETPROP (in the case of
-     * Foo.prototype.bar), or can be under an assignment (in the case of Foo.prototype = ...).
+     * Examines a qualified name ending in `.prototype`.
      *
+     * <p>If it is part of an assignment like `foo.prototype = {}` or `foo.prototype.bar = x`,
+     * record this reference as the definition of one or more prototype properties and return
+     * `true`.
+     *
+     * @param t
+     * @param ref A reference to some qualified name that ends with `.prototype`
      * @return True if a declaration was added.
      */
-    private boolean processPrototypeRef(NodeTraversal t, Node ref) {
+    private boolean handlePossibleAssignmentToPrototype(NodeTraversal t, Node ref) {
       Node root = NodeUtil.getRootOfQualifiedName(ref);
 
       Node n = ref.getParent();
@@ -815,6 +851,10 @@ class AnalyzePrototypeProperties implements CompilerPass {
     // outer scope which isn't the global scope.
     private boolean readClosureVariables = false;
 
+    // does the definition refer to `super`?
+    // We cannot move references to `super` outside of the class body.
+    private boolean referencesSuper = false;
+
     /**
      * Constructs a new NameInfo.
      *
@@ -838,6 +878,11 @@ class AnalyzePrototypeProperties implements CompilerPass {
     /** Determines whether it reads a closure variable. */
     boolean readsClosureVariables() {
       return readClosureVariables;
+    }
+
+    /** Does the definition refer to `super`? */
+    boolean referencesSuper() {
+      return referencesSuper;
     }
 
     /**

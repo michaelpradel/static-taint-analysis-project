@@ -19,6 +19,7 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
 import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
+import com.google.javascript.jscomp.testing.TestExternsBuilder;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -30,8 +31,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   @Override
   protected CompilerOptions getDefaultOptions() {
     CompilerOptions options = super.getDefaultOptions();
-    options.setLanguageIn(LanguageMode.ECMASCRIPT_NEXT);
     options.setLanguageOut(LanguageMode.ECMASCRIPT_NEXT);
+    options.setWarningLevel(DiagnosticGroups.TOO_MANY_TYPE_PARAMS, CheckLevel.WARNING);
     return options;
   }
 
@@ -448,6 +449,17 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
     testTypesWithExtraExterns(
         "function use(x) {}",
         "use(...1);",
+        lines(
+            "Spread operator only applies to Iterable types",
+            "found   : number",
+            "required: Iterable"));
+  }
+
+  @Test
+  public void testArgumentSpreadNonIterable_optChainCall() {
+    testTypesWithExtraExterns(
+        "function use(x) {}",
+        "use?.(...1);",
         lines(
             "Spread operator only applies to Iterable types",
             "found   : number",
@@ -893,11 +905,10 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "/** @const */ alias.foo = 42",
             "/** @type {alias.MyNumber} */ const x = 'str';",
             ""),
-        // TODO(sdh): should be non-nullable number, but we get nullability wrong.
         lines(
             "initializing variable", // preserve newlines
             "found   : string",
-            "required: (null|number)"));
+            "required: number"));
   }
 
   @Test
@@ -913,28 +924,24 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  /** @const */ alias.foo = 42",
             "  /** @type {alias.MyNumber} */ const x = 'str';",
             "}"),
-        // TODO(sdh): should be non-nullable number, but we get nullability wrong.
         lines(
             "initializing variable", // preserve newlines
             "found   : string",
-            "required: (null|number)"));
+            "required: number"));
   }
 
   @Test
-  public void testTypedefOnClassSideInheritedSubtype() {
-    // Class-side inheritance should carry over any typedefs nested on the class.
+  public void testTypedefOnClassSideInheritedSubtypeInaccessible() {
+    // Class-side inheritance should not carry over any types nested on the class.
     testTypes(
         lines(
             "class Base {}",
             "/** @typedef {number} */", // preserve newlines
             "Base.MyNumber;",
             "class Sub extends Base {}",
-            "/** @type {Sub.MyNumber} */ const x = 'str';",
+            "/** @type {Sub.MyNumber} */ let x;",
             ""),
-        lines(
-            "initializing variable", // preserve newlines
-            "found   : string",
-            "required: (null|number)"));
+        "Bad type annotation. Unknown type Sub.MyNumber");
   }
 
   @Test
@@ -2038,6 +2045,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "/** @dict */", //
             "class C {",
             "  ['f']() {}",
+            "  [123]() {}",
+            "  [123n]() {}",
             "}"));
   }
 
@@ -2474,29 +2483,28 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
 
   @Test
   public void testClassTooManyTypeParameters() {
-    // TODO(sdh): This should give a warning about too many type parameters.
     testTypes(
         lines(
             "class Foo {}", //
             "var /** !Foo<number> */ x = new Foo();",
-            "var /** !Foo<string> */ y = x;"));
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
   }
 
   @Test
   public void testClassWithTemplatizedConstructorTooManyTypeParameters() {
-    // TODO(sdh): This should give a warning about too many type parameters.
     testTypes(
         lines(
             "class Foo {",
             "  /** @template T */ constructor() {}",
             "}", //
             "var /** !Foo<number> */ x = new Foo();",
-            "var /** !Foo<string> */ y = x;"));
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
   }
 
   @Test
   public void testClassWithTemplatizedClassAndConstructorTooManyTypeParameters() {
-    // TODO(sdh): This should give a warning about too many type parameters.
     testTypes(
         lines(
             "/** @template T */",
@@ -2504,7 +2512,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  /** @template U */ constructor() {}",
             "}", //
             "var /** !Foo<number, number> */ x = new Foo();",
-            "var /** !Foo<number, string> */ y = x;"));
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
   }
 
   @Test
@@ -3267,7 +3276,6 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
 
   @Test
   public void testClassConstructorTypeParametersNotIncludedOnClass() {
-    // TODO(sdh): This should give a warning about too many type parameters.
     testTypes(
         lines(
             "/** @template T */",
@@ -3276,7 +3284,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "  constructor() {}",
             "}",
             "var /** !Foo<string, string> */ x = new Foo();",
-            "var /** !Foo<string, number> */ y = x;"));
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
   }
 
   @Test
@@ -3846,20 +3855,25 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
-  public void testStaticMethod_onNamespacedType_thatIsNotAnOverride_atOverride_isBad() {
+  public void testClassExtendsForwardReference_staticMethodThatIsAnOverride_atOverride_isOk() {
     testTypes(
         lines(
-            "const ns = {};",
+            "/** @return {function(new: Parent): ?} */",
+            "function mixin() {}",
+            "/** @extends {Parent} */",
+            "class Middle extends mixin() {",
+            "  /** @override */",
+            "  static method() {}",
+            "}",
             "",
-            "ns.Base = class {};",
+            "class Child extends Middle {",
+            "  /** @override */",
+            "  static method() {}",
+            "}",
             "",
-            "/**",
-            " * @override",
-            " * @param {string} arg",
-            " */",
-            // We specifically want to check that q-name lookups are checked.
-            "ns.Base.method = function(arg) {};"),
-        lines("property method not defined on any supertype of (typeof ns.Base)"));
+            "class Parent {",
+            "  method() {}",
+            "}"));
   }
 
   @Test
@@ -4068,6 +4082,33 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "actual parameter 1 of Foo.prototype.foo does not match formal parameter",
             "found   : number",
             "required: string"));
+  }
+
+  @Test
+  public void testClassSuperMethodCallableInParameters() {
+    testTypes(
+        lines(
+            "class Foo {",
+            "  /** @return {string|number} */",
+            "  foo() {",
+            "    return 0;",
+            "  }",
+            "}",
+            "class Bar extends Foo {",
+            "  /**",
+            "   * @param {number=} param",
+            "   * @return {string}",
+            "   * @override",
+            "   */",
+            //  super.foo() returns string|number, so `param` is typed as `string|number`
+            "  foo(param = super.foo()) {",
+            "    return 'param: ' + param;",
+            "  }",
+            "}"),
+        lines(
+            "default value has wrong type", //
+            "found   : (number|string)",
+            "required: (number|undefined)"));
   }
 
   @Test
@@ -4424,8 +4465,8 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "new C().x = null;"),
         new String[] {
           lines(
-              // TODO(sdh): Having different getter and setter types should be allowed and not
-              // produce the following error.
+              // TODO(b/116797078): Having different getter and setter types should be allowed and
+              // not produce the following error.
               "The types of the getter and setter for property 'x' do not match.",
               "getter type is: number",
               "setter type is: string"),
@@ -4436,7 +4477,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
           lines(
               "assignment to property x of C",
               "found   : null",
-              // TODO(sdh): This should report that it requires a string.
+              // TODO(b/116797078): This should report that it requires a string.
               "required: number")
         });
   }
@@ -4483,6 +4524,43 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "The types of the getter and setter for property 'x' do not match.",
             "getter type is: xRecord",
             "setter type is: {x: number}"));
+  }
+
+  @Test
+  public void testClassGetterWithShadowingDeclarationOnInstanceType() {
+    testTypes(
+        lines(
+            "class C {",
+            "  constructor() {",
+            "    /** @type {string|undefined} */",
+            "    this.x;",
+            "  }",
+            "  /** @return {number} */",
+            "  get x() { return 0; }",
+            "}",
+            "new C().x = null;"),
+        new String[] {
+          // TODO(b/144954613): we could really throw a clearer error here at the point where we
+          // redeclare 'this.x', and also should forbid writing to 'new C().x'.
+          lines("assignment to property x of C", "found   : null", "required: number")
+        });
+  }
+
+  @Test
+  public void testClassGetterWithDuplicateDeclarationLater() {
+    testTypes(
+        lines(
+            "class C {",
+            "  /** @return {number} */",
+            "  get x() {}",
+            "}",
+            "/** @type {string} */",
+            "C.prototype.x;",
+            "new C().x = null;"),
+        new String[] {
+          // TODO(b/144954613): this should report an error related to the redeclaration of 'x'
+          lines("assignment to property x of C", "found   : null", "required: number")
+        });
   }
 
   @Test
@@ -6220,10 +6298,9 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "outer.inner = alias;",
             "const /** outer.inner.child.MyNumber */ x = '';"),
         lines(
-            "initializing variable",
+            "initializing variable", //
             "found   : string",
-            // TODO(sdh): this should not be nullable
-            "required: (null|number)"));
+            "required: number"));
   }
 
   @Test
@@ -6369,7 +6446,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "async function* asyncGen() { yield* gen; }"),
         lines(
             "Expression yield* expects an iterable or async iterable",
-            "found   : (AsyncGenerator<number>|Generator<string>|number)",
+            "found   : (AsyncGenerator<number,?,?>|Generator<string,?,?>|number)",
             "required: (AsyncIterator|Iterator)"));
   }
 
@@ -6663,7 +6740,7 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
             "let /** null */ g = asyncGen();"),
         lines(
             "initializing variable", //
-            "found   : AsyncGenerator<?>",
+            "found   : AsyncGenerator<?,?,?>",
             "required: null"));
   }
 
@@ -6968,6 +7045,50 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
   }
 
   @Test
+  public void testJsdocCanReferToGoogModuleType_withoutNamedType() {
+    testTypes(
+        lines(
+            CLOSURE_DEFS,
+            "goog.loadModule(function(exports) {",
+            "  goog.module('a');",
+            "  exports.Foo = class {};",
+            "  return exports;",
+            "});",
+            "/** @type {!a.Foo<number>} */",
+            "let x;",
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
+  }
+
+  @Test
+  public void testJsdocCanReferToFunctionDeclarationType_withoutNamedType() {
+    testTypes(
+        lines(
+            CLOSURE_DEFS,
+            // file1
+            "goog.provide('a.Foo');",
+            "/** @constructor */",
+            "a.Foo = function() {};",
+            "",
+            // file2
+            "goog.loadModule(function(exports) {",
+            "  goog.module('b.Bar');",
+            "",
+            "  const Foo = goog.require('a.Foo');",
+            "  /** @constructor @extends {Foo} */",
+            "  function Bar() {}",
+            "  exports = Bar;",
+            "  return exports;",
+            "});",
+            "",
+            // file3
+            "/** @type {!b.Bar<number>} */",
+            "let x;",
+            ""),
+        RhinoErrorReporter.TOO_MANY_TEMPLATE_PARAMS);
+  }
+
+  @Test
   public void testTypeCheckingEsModule_exportSpecs() {
     testTypes("const x = 0; export {x};");
   }
@@ -7061,5 +7182,35 @@ public final class TypeCheckNoTranspileTest extends TypeCheckTestCase {
                 + " declared the property, make sure to give it a type.)",
             "Cannot do '[]' access on a struct",
             "Cannot do '[]' access on a struct"));
+  }
+
+  @Test
+  public void testUnion_forwardEnumRefAndNumber() {
+    testTypes(
+        lines(
+            "/** @enum {Type} */",
+            "const Enum = {A: 'a'};",
+            "/** @typedef {string} */ let Type;",
+            "const /** !Enum|number */ n = null;"),
+        lines(
+            "initializing variable",
+            "found   : null",
+            "required: (Enum<string>|number)" // Verify this doesn't drop Enum<string>
+            ));
+  }
+
+  @Test
+  public void testUnion_numberAndForwardEnumRef() {
+    testTypes(
+        lines(
+            "/** @enum {Type} */",
+            "const Enum = {A: 'a'};",
+            "/** @typedef {string} */ let Type;",
+            "const /** number|!Enum */ n = null;"),
+        lines(
+            "initializing variable",
+            "found   : null",
+            "required: (Enum<string>|number)" // Verify this doesn't drop Enum<string>
+            ));
   }
 }

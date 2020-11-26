@@ -161,6 +161,16 @@ function LayoutShift() {}
 /** @type {number} */ LayoutShift.prototype.value;
 /** @type {boolean} */ LayoutShift.prototype.hadRecentInput;
 /** @type {number} */ LayoutShift.prototype.lastInputTime;
+/** @type {!Array<!LayoutShiftAttribution>} */ LayoutShift.prototype.sources;
+
+/**
+ * https://wicg.github.io/layout-instability/#sec-layout-shift
+ * @constructor
+ */
+function LayoutShiftAttribution() {}
+/** @type {?Node} */ LayoutShiftAttribution.prototype.node;
+/** @type {!DOMRectReadOnly} */ LayoutShiftAttribution.prototype.previousRect;
+/** @type {!DOMRectReadOnly} */ LayoutShiftAttribution.prototype.currentRect;
 
 /**
  * https://wicg.github.io/largest-contentful-paint/#largestcontentfulpaint
@@ -184,6 +194,7 @@ function PerformanceEventTiming() {}
 /** @type {number} */ PerformanceEventTiming.prototype.processingStart;
 /** @type {number} */ PerformanceEventTiming.prototype.processingEnd;
 /** @type {boolean} */ PerformanceEventTiming.prototype.cancelable;
+/** @type {?Node} */ PerformanceEventTiming.prototype.target;
 
 /** @constructor */
 function Performance() {}
@@ -315,10 +326,15 @@ PerformanceObserver.prototype.observe = function(options) {};
 PerformanceObserver.prototype.disconnect = function() {};
 
 /**
- * See https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserver/takeRecords
- * @return {!PerformanceObserverEntryList}
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserver/takeRecords
+ * @see https://www.w3.org/TR/performance-timeline-2/#takerecords-method
+ * @return {!Array<!PerformanceEntry>} The current PerformanceEntry list stored
+ *     in the performance observer buffer, emptying it out.
  */
 PerformanceObserver.prototype.takeRecords = function() {};
+
+/** @const {!Array<string>} */
+PerformanceObserver.prototype.supportedEntryTypes;
 
 /**
  * @record

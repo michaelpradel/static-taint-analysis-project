@@ -25,7 +25,9 @@ import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.javascript.rhino.IR;
+import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
+import com.google.javascript.rhino.Token;
 import com.google.javascript.rhino.jstype.BooleanLiteralSet;
 import com.google.javascript.rhino.jstype.FunctionType;
 import com.google.javascript.rhino.jstype.JSType;
@@ -34,6 +36,8 @@ import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.jstype.ObjectType;
 import com.google.javascript.rhino.jstype.TemplateTypeMap;
 import com.google.javascript.rhino.jstype.TemplateTypeReplacer;
+import java.util.Arrays;
+import java.util.List;
 import javax.annotation.Nullable;
 
 /**
@@ -47,6 +51,8 @@ import javax.annotation.Nullable;
  * determine the correct type information from already existing AST nodes and the current scope.
  */
 final class AstFactory {
+
+  private static final Splitter DOT_SPLITTER = Splitter.on(".");
 
   @Nullable private final JSTypeRegistry registry;
   // We need the unknown type so frequently, it's worth caching it.
@@ -97,7 +103,7 @@ final class AstFactory {
    * AstFactory} to create new nodes.
    */
   Node exprResult(Node expr) {
-    return IR.exprResult(expr);
+    return IR.exprResult(expr).srcref(expr);
   }
 
   /**
@@ -245,6 +251,21 @@ final class AstFactory {
     return result;
   }
 
+  /** Returns a new Node representing the undefined value. */
+  public Node createUndefinedValue() {
+    // We prefer `void 0` as being shorter than `undefined`.
+    // Also, it's technically possible for malicious code to assign a value to `undefined`.
+    return createVoid(createNumber(0));
+  }
+
+  Node createCastToUnknown(Node child, JSDocInfo jsdoc) {
+    Node result = IR.cast(child, jsdoc);
+    if (isAddingTypes()) {
+      result.setJSType(getNativeType(JSTypeNative.UNKNOWN_TYPE));
+    }
+    return result;
+  }
+
   Node createNot(Node child) {
     Node result = IR.not(child);
     if (isAddingTypes()) {
@@ -341,6 +362,36 @@ final class AstFactory {
   }
 
   /**
+   * Creates a new `let` declaration for a single variable name with a void type and no JSDoc.
+   *
+   * <p>e.g. `let variableName`
+   */
+  Node createSingleLetNameDeclaration(String variableName) {
+    return IR.let(createName(variableName, JSTypeNative.VOID_TYPE));
+  }
+
+  /**
+   * Creates a new `var` declaration statement for a single variable name with void type and no
+   * JSDoc.
+   *
+   * <p>e.g. `var variableName`
+   */
+  Node createSingleVarNameDeclaration(String variableName) {
+    return IR.var(createName(variableName, JSTypeNative.VOID_TYPE));
+  }
+
+  /**
+   * Creates a new `var` declaration statement for a single variable name.
+   *
+   * <p>Takes the type for the variable name from the value node.
+   *
+   * <p>e.g. `var variableName = value;`
+   */
+  Node createSingleVarNameDeclaration(String variableName, Node value) {
+    return IR.var(createName(variableName, value.getJSType()), value);
+  }
+
+  /**
    * Creates a new `const` declaration statement for a single variable name.
    *
    * <p>Takes the type for the variable name from the value node.
@@ -401,18 +452,48 @@ final class AstFactory {
   }
 
   Node createQName(Scope scope, String qname) {
-    return createQName(scope, Splitter.on(".").split(qname));
+    return createQName(scope, DOT_SPLITTER.split(qname));
   }
 
-  private Node createQName(Scope scope, Iterable<String> names) {
+  /**
+   * Looks up the type of a name from a {@link TypedScope} created from typechecking
+   *
+   * @param globalTypedScope Must be the top, global scope.
+   */
+  Node createQName(TypedScope globalTypedScope, String qname) {
+    checkArgument(globalTypedScope == null || globalTypedScope.isGlobal(), globalTypedScope);
+    List<String> nameParts = DOT_SPLITTER.splitToList(qname);
+    checkState(!nameParts.isEmpty());
+
+    String receiverPart = nameParts.get(0);
+    Node receiver = IR.name(receiverPart);
+    if (this.isAddingTypes()) {
+      TypedVar var = checkNotNull(globalTypedScope.getVar(receiverPart), receiverPart);
+      receiver.setJSType(checkNotNull(var.getType(), var));
+    }
+
+    List<String> otherParts = nameParts.subList(1, nameParts.size());
+    return this.createGetProps(receiver, otherParts);
+  }
+
+  Node createQName(Scope scope, Iterable<String> names) {
     String baseName = checkNotNull(Iterables.getFirst(names, null));
     Iterable<String> propertyNames = Iterables.skip(names, 1);
+    return createQName(scope, baseName, propertyNames);
+  }
+
+  Node createQName(Scope scope, String baseName, String... propertyNames) {
+    checkNotNull(baseName);
+    return createQName(scope, baseName, Arrays.asList(propertyNames));
+  }
+
+  Node createQName(Scope scope, String baseName, Iterable<String> propertyNames) {
     Node baseNameNode = createName(scope, baseName);
     return createGetProps(baseNameNode, propertyNames);
   }
 
   Node createGetProp(Node receiver, String propertyName) {
-    Node result = IR.getprop(receiver, IR.string(propertyName));
+    Node result = IR.getprop(receiver, createString(propertyName));
     if (isAddingTypes()) {
       result.setJSType(getJsTypeForProperty(receiver, propertyName));
     }
@@ -420,7 +501,7 @@ final class AstFactory {
   }
 
   /** Creates a tree of nodes representing `receiver.name1.name2.etc`. */
-  private Node createGetProps(Node receiver, Iterable<String> propertyNames) {
+  Node createGetProps(Node receiver, Iterable<String> propertyNames) {
     Node result = receiver;
     for (String propertyName : propertyNames) {
       result = createGetProp(result, propertyName);
@@ -470,6 +551,21 @@ final class AstFactory {
       result.setJSType(value.getJSType());
     }
     return result;
+  }
+
+  /**
+   * Create a getter definition to be inserted into either a class body or object literal.
+   *
+   * <p>{@code get name() { return value; }}
+   */
+  Node createGetterDef(String name, Node value) {
+    JSType returnType = value.getJSType();
+    // Name is stored on the GETTER_DEF node. The function has no name.
+    Node functionNode =
+        createZeroArgFunction(/* name= */ "", IR.block(createReturn(value)), returnType);
+    Node getterNode = Node.newString(Token.GETTER_DEF, name);
+    getterNode.addChildToFront(functionNode);
+    return getterNode;
   }
 
   Node createIn(Node left, Node right) {
@@ -586,7 +682,7 @@ final class AstFactory {
    * type is known.
    */
   Node createObjectDotAssignCall(Scope scope, JSType returnType, Node... args) {
-    Node objAssign = createQName(scope, "Object.assign");
+    Node objAssign = createQName(scope, "Object", "assign");
     Node result = createCall(objAssign, args);
 
     if (isAddingTypes()) {
@@ -678,6 +774,11 @@ final class AstFactory {
     return result;
   }
 
+  /** Creates an assignment expression `lhs = rhs` */
+  Node createAssign(String lhsName, Node rhs) {
+    return createAssign(createName(lhsName, rhs.getJSType()), rhs);
+  }
+
   /**
    * Creates an object-literal with zero or more elements, `{}`.
    *
@@ -687,6 +788,15 @@ final class AstFactory {
     Node result = IR.objectlit(elements);
     if (isAddingTypes()) {
       result.setJSType(registry.createAnonymousObjectType(null));
+    }
+    return result;
+  }
+
+  /** Creates an object-literal with zero or more elements and a specific type. */
+  Node createObjectLit(@Nullable JSType jsType, Node... elements) {
+    Node result = IR.objectlit(elements);
+    if (isAddingTypes()) {
+      result.setJSType(checkNotNull(jsType));
     }
     return result;
   }
@@ -733,7 +843,8 @@ final class AstFactory {
   }
 
   Node createZeroArgFunction(String name, Node body, @Nullable JSType returnType) {
-    FunctionType functionType = isAddingTypes() ? registry.createFunctionType(returnType) : null;
+    FunctionType functionType =
+        isAddingTypes() ? registry.createFunctionType(returnType).toMaybeFunctionType() : null;
     return createFunction(name, IR.paramList(), body, functionType);
   }
 
@@ -753,8 +864,8 @@ final class AstFactory {
       FunctionType functionType =
           FunctionType.builder(registry)
               .withReturnType(expression.getJSTypeRequired())
-              .withParamsNode(IR.paramList())
-              .build();
+              .withParameters()
+              .buildAndResolve();
       result.setJSType(functionType);
     }
     return result;
@@ -780,6 +891,22 @@ final class AstFactory {
     return result;
   }
 
+  Node createEq(Node expr1, Node expr2) {
+    Node result = IR.eq(expr1, expr2);
+    if (isAddingTypes()) {
+      result.setJSType(getNativeType(JSTypeNative.BOOLEAN_TYPE));
+    }
+    return result;
+  }
+
+  Node createNe(Node expr1, Node expr2) {
+    Node result = IR.ne(expr1, expr2);
+    if (isAddingTypes()) {
+      result.setJSType(getNativeType(JSTypeNative.BOOLEAN_TYPE));
+    }
+    return result;
+  }
+
   Node createHook(Node condition, Node expr1, Node expr2) {
     Node result = IR.hook(condition, expr1, expr2);
     if (isAddingTypes()) {
@@ -789,6 +916,10 @@ final class AstFactory {
   }
 
   Node createArraylit(Node... elements) {
+    return createArraylit(Arrays.asList(elements));
+  }
+
+  Node createArraylit(Iterable<Node> elements) {
     Node result = IR.arraylit(elements);
     if (isAddingTypes()) {
       result.setJSType(
@@ -802,7 +933,7 @@ final class AstFactory {
 
   Node createJSCompMakeIteratorCall(Node iterable, Scope scope) {
     String function = "makeIterator";
-    Node makeIteratorName = createQName(scope, "$jscomp." + function);
+    Node makeIteratorName = createQName(scope, "$jscomp", function);
     // Since createCall (currently) doesn't handle templated functions, fill in the template types
     // of makeIteratorName manually.
     if (isAddingTypes() && !makeIteratorName.getJSType().isUnknownType()) {
@@ -813,7 +944,8 @@ final class AstFactory {
       JSType iterableType =
           iterable
               .getJSType()
-              .getInstantiatedTypeArgument(getNativeType(JSTypeNative.ITERABLE_TYPE));
+              .getTemplateTypeMap()
+              .getResolvedTemplateType(registry.getIterableTemplate());
       JSType makeIteratorType = makeIteratorName.getJSType();
       // e.g. replace
       //   function(Iterable<T>): Iterator<T>
@@ -825,19 +957,18 @@ final class AstFactory {
   }
 
   Node createJscompArrayFromIteratorCall(Node iterator, Scope scope) {
-    String function = "arrayFromIterator";
-    Node makeIteratorName = createQName(scope, "$jscomp." + function);
+    Node makeIteratorName = createQName(scope, "$jscomp", "arrayFromIterator");
     // Since createCall (currently) doesn't handle templated functions, fill in the template types
     // of makeIteratorName manually.
     if (isAddingTypes() && !makeIteratorName.getJSType().isUnknownType()) {
       // if makeIteratorName has the unknown type, we must have not injected the required runtime
       // libraries - hopefully because this is in a test using NonInjectingCompiler.
 
-      // e.g get `number` from `Iterator<number>`
       JSType iterableType =
           iterator
               .getJSType()
-              .getInstantiatedTypeArgument(getNativeType(JSTypeNative.ITERATOR_TYPE));
+              .getTemplateTypeMap()
+              .getResolvedTemplateType(registry.getIteratorValueTemplate());
       JSType makeIteratorType = makeIteratorName.getJSType();
       // e.g. replace
       //   function(Iterator<T>): Array<T>
@@ -862,7 +993,7 @@ final class AstFactory {
    * }</pre>
    */
   Node createJSCompMakeAsyncIteratorCall(Node iterable, Scope scope) {
-    Node makeIteratorAsyncName = createQName(scope, "$jscomp.makeAsyncIterator");
+    Node makeIteratorAsyncName = createQName(scope, "$jscomp", "makeAsyncIterator");
     // Since createCall (currently) doesn't handle templated functions, fill in the template types
     // of makeIteratorName manually.
     if (isAddingTypes() && !makeIteratorAsyncName.getJSType().isUnknownType()) {
@@ -900,7 +1031,7 @@ final class AstFactory {
    * @param originalFunctionType the type of the async generator function that needs transpilation
    */
   Node createAsyncGeneratorWrapperReference(JSType originalFunctionType, Scope scope) {
-    Node ctor = createQName(scope, "$jscomp.AsyncGeneratorWrapper");
+    Node ctor = createQName(scope, "$jscomp", "AsyncGeneratorWrapper");
 
     if (isAddingTypes() && !ctor.getJSType().isUnknownType()) {
       // if ctor has the unknown type, we must have not injected the required runtime
@@ -911,7 +1042,8 @@ final class AstFactory {
           originalFunctionType
               .toMaybeFunctionType()
               .getReturnType()
-              .getInstantiatedTypeArgument(getNativeType(JSTypeNative.ASYNC_ITERABLE_TYPE));
+              .getTemplateTypeMap()
+              .getResolvedTemplateType(registry.getAsyncIterableTemplate());
 
       // e.g. replace
       //  AsyncGeneratorWrapper<T>
@@ -945,7 +1077,8 @@ final class AstFactory {
         // Generator<$jscomp.AsyncGeneratorWrapper$ActionRecord<number>>
         JSType innerFunctionReturnType =
             Iterables.getOnlyElement(
-                asyncGeneratorWrapperType.toMaybeFunctionType().getParameterTypes());
+                    asyncGeneratorWrapperType.toMaybeFunctionType().getParameters())
+                .getJSType();
         generatorType = registry.createFunctionType(innerFunctionReturnType);
       }
     }
@@ -954,8 +1087,8 @@ final class AstFactory {
   }
 
   Node createJscompAsyncExecutePromiseGeneratorFunctionCall(Scope scope, Node generatorFunction) {
-    String function = "asyncExecutePromiseGeneratorFunction";
-    Node jscompDotAsyncExecutePromiseGeneratorFunction = createQName(scope, "$jscomp." + function);
+    Node jscompDotAsyncExecutePromiseGeneratorFunction =
+        createQName(scope, "$jscomp", "asyncExecutePromiseGeneratorFunction");
     // TODO(bradfordcsmith): Maybe update the type to be more specific
     // Currently this method expects `function(): !Generator<?>` and returns `Promise<?>`.
     // Since we propagate type information only if type checking has already run,

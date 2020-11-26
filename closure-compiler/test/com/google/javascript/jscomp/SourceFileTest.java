@@ -29,7 +29,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -43,7 +42,6 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
 
 @RunWith(JUnit4.class)
 public final class SourceFileTest {
@@ -99,14 +97,14 @@ public final class SourceFileTest {
     String newExpectedContent = "// new content new content new content";
 
     Path jsPath = folder.newFile("test.js").toPath();
-    MoreFiles.asCharSink(jsPath, StandardCharsets.UTF_8).write(expectedContent);
-    SourceFile sourceFile = SourceFile.fromPath(jsPath, StandardCharsets.UTF_8);
+    MoreFiles.asCharSink(jsPath, UTF_8).write(expectedContent);
+    SourceFile sourceFile = SourceFile.fromPath(jsPath, UTF_8);
 
     // Verify initial state.
     assertThat(sourceFile.getCode()).isEqualTo(expectedContent);
 
     // Perform a change.
-    MoreFiles.asCharSink(jsPath, StandardCharsets.UTF_8).write(newExpectedContent);
+    MoreFiles.asCharSink(jsPath, UTF_8).write(newExpectedContent);
     sourceFile.clearCachedSource();
 
     // Verify final state.
@@ -122,10 +120,7 @@ public final class SourceFileTest {
     createZipWithContent(jsZipFile, expectedContent);
     SourceFile zipSourceFile =
         SourceFile.fromZipEntry(
-            jsZipFile.toString(),
-            jsZipFile.toAbsolutePath().toString(),
-            "foo.js",
-            StandardCharsets.UTF_8);
+            jsZipFile.toString(), jsZipFile.toAbsolutePath().toString(), "foo.js", UTF_8);
 
     // Verify initial state.
     assertThat(zipSourceFile.getCode()).isEqualTo(expectedContent);
@@ -153,7 +148,7 @@ public final class SourceFileTest {
             jsZipPath.toString(),
             jsZipPath.toAbsolutePath().toString(),
             "foo.js",
-            StandardCharsets.UTF_8,
+            UTF_8,
             SourceKind.WEAK);
     assertThat(sourceFileFromZipEntry.getCode()).isEqualTo(expectedContent);
     assertThat(sourceFileFromZipEntry.getKind()).isEqualTo(SourceKind.WEAK);
@@ -161,27 +156,21 @@ public final class SourceFileTest {
     // Test SourceFile#fromZipEntry(String, String, String, Charset)
     SourceFile sourceFileFromZipEntryDefaultKind =
         SourceFile.fromZipEntry(
-            jsZipPath.toString(),
-            jsZipPath.toAbsolutePath().toString(),
-            "foo.js",
-            StandardCharsets.UTF_8);
+            jsZipPath.toString(), jsZipPath.toAbsolutePath().toString(), "foo.js", UTF_8);
     assertThat(sourceFileFromZipEntryDefaultKind.getCode()).isEqualTo(expectedContent);
     assertThat(sourceFileFromZipEntryDefaultKind.getKind()).isEqualTo(SourceKind.STRONG);
 
     // Test SourceFile#fromFile(String)
-    SourceFile sourceFileFromFileString =
-        SourceFile.fromFile(jsZipPath + "!/foo.js", StandardCharsets.UTF_8);
+    SourceFile sourceFileFromFileString = SourceFile.fromFile(jsZipPath + "!/foo.js", UTF_8);
     assertThat(sourceFileFromFileString.getCode()).isEqualTo(expectedContent);
 
     // Test SourceFile#fromFile(String, Charset)
-    SourceFile sourceFileFromFileStringCharset =
-        SourceFile.fromFile(jsZipPath + "!/foo.js", StandardCharsets.UTF_8);
+    SourceFile sourceFileFromFileStringCharset = SourceFile.fromFile(jsZipPath + "!/foo.js", UTF_8);
     assertThat(sourceFileFromFileStringCharset.getCode()).isEqualTo(expectedContent);
 
     // Test SourceFile#fromPath(Path, Charset)
     Path zipEntryPath = Paths.get(jsZipPath + "!/foo.js");
-    SourceFile sourceFileFromPathCharset =
-        SourceFile.fromPath(zipEntryPath, StandardCharsets.UTF_8);
+    SourceFile sourceFileFromPathCharset = SourceFile.fromPath(zipEntryPath, UTF_8);
     assertThat(sourceFileFromPathCharset.getCode()).isEqualTo(expectedContent);
   }
 
@@ -192,8 +181,7 @@ public final class SourceFileTest {
     Path jsZipPath = folder.newFile("test.js.zip").toPath();
     createZipWithContent(jsZipPath, "// <program goes here>");
 
-    List<SourceFile> sourceFiles =
-        SourceFile.fromZipFile(jsZipPath.toString(), StandardCharsets.UTF_8);
+    List<SourceFile> sourceFiles = SourceFile.fromZipFile(jsZipPath.toString(), UTF_8);
     assertThat(sourceFiles).hasSize(1);
 
     SourceFile sourceFile = Iterables.getOnlyElement(sourceFiles);
@@ -210,7 +198,7 @@ public final class SourceFileTest {
 
     List<SourceFile> sourceFiles =
         SourceFile.fromZipInput(
-            jsZipPath.toString(), new FileInputStream(jsZipPath.toFile()), StandardCharsets.UTF_8);
+            jsZipPath.toString(), new FileInputStream(jsZipPath.toFile()), UTF_8);
     assertThat(sourceFiles).hasSize(1);
 
     SourceFile sourceFile = Iterables.getOnlyElement(sourceFiles);
@@ -229,7 +217,7 @@ public final class SourceFileTest {
     zipFile.toFile().createNewFile();
     try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(zipFile.toFile()))) {
       zos.putNextEntry(new ZipEntry("foo.js"));
-      zos.write(content.getBytes(StandardCharsets.UTF_8));
+      zos.write(content.getBytes(UTF_8));
       zos.closeEntry();
     }
     Files.setLastModifiedTime(zipFile, FileTime.from(lastModified));
@@ -300,5 +288,62 @@ public final class SourceFileTest {
     SourceFile afterSerialization = (SourceFile) ois.readObject();
     ois.close();
     assertThat(afterSerialization.getCode()).isEqualTo(sourceFile.getCode());
+  }
+
+  @Test
+  public void testGetLines() {
+    SourceFile sourceFile =
+        SourceFile.fromCode("file.js", "const a = 0;\nconst b = 1;\nconst c = 2;");
+
+    assertThat(sourceFile.getLines(1, 1).getSourceExcerpt()).isEqualTo("const a = 0;");
+    assertThat(sourceFile.getLines(2, 1).getSourceExcerpt()).isEqualTo("const b = 1;");
+    assertThat(sourceFile.getLines(3, 1).getSourceExcerpt()).isEqualTo("const c = 2;");
+
+    assertThat(sourceFile.getLines(1, "const a = 0;\n".length()).getSourceExcerpt())
+        .isEqualTo("const a = 0;");
+    assertThat(sourceFile.getLines(1, "const a = 0;\nconst b".length()).getSourceExcerpt())
+        .isEqualTo("const a = 0;\nconst b = 1;");
+    assertThat(sourceFile.getLines(2, "const b = 1;\nconst c".length()).getSourceExcerpt())
+        .isEqualTo("const b = 1;\nconst c = 2;");
+
+    assertThat(sourceFile.getLines(3, "const c = 2;".length()).getSourceExcerpt())
+        .isEqualTo("const c = 2;");
+  }
+
+  @Test
+  public void testGetLines_invalidLengths() {
+    SourceFile sourceFile =
+        SourceFile.fromCode("file.js", "const a = 0;\nconst b = 1;\nconst c = 2;");
+
+    assertThat(sourceFile.getLines(0, -3).getSourceExcerpt()).isEqualTo("const a = 0;");
+    assertThat(sourceFile.getLines(0, 0).getSourceExcerpt()).isEqualTo("const a = 0;");
+    assertThat(sourceFile.getLines(1, 100000).getSourceExcerpt())
+        .isEqualTo("const a = 0;\nconst b = 1;\nconst c = 2;");
+    assertThat(sourceFile.getLines(2, 10000).getSourceExcerpt())
+        .isEqualTo("const b = 1;\nconst c = 2;");
+    assertThat(sourceFile.getLines(3, 10000).getSourceExcerpt()).isEqualTo("const c = 2;");
+  }
+
+  @Test
+  public void testGetLines_whenFileEndsWithNewline() {
+    SourceFile sourceFile =
+        SourceFile.fromCode("file.js", "const a = 0;\nconst b = 1;\nconst c = 2;\n");
+
+    assertThat(sourceFile.getLines(1, 100000).getSourceExcerpt())
+        .isEqualTo("const a = 0;\nconst b = 1;\nconst c = 2;");
+    assertThat(sourceFile.getLines(2, 10000).getSourceExcerpt())
+        .isEqualTo("const b = 1;\nconst c = 2;");
+    assertThat(sourceFile.getLines(3, 1).getSourceExcerpt()).isEqualTo("const c = 2;");
+    assertThat(sourceFile.getLines(4, 1).getSourceExcerpt()).isEmpty();
+  }
+
+  @Test
+  public void testGetLines_invalidLineNumbers() {
+    SourceFile sourceFile =
+        SourceFile.fromCode("file.js", "const a = 0;\nconst b = 1;\nconst c = 2;");
+
+    assertThat(sourceFile.getLines(-20, 1).getSourceExcerpt()).isEqualTo("const a = 0;");
+    assertThat(sourceFile.getLines(0, 1).getSourceExcerpt()).isEqualTo("const a = 0;");
+    assertThat(sourceFile.getLines(4, 1)).isNull();
   }
 }

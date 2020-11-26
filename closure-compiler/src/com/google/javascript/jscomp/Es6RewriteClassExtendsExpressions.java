@@ -60,8 +60,6 @@ public final class Es6RewriteClassExtendsExpressions extends NodeTraversal.Abstr
 
   @Override
   public void process(Node externs, Node root) {
-    // TODO(bradfordcsmith): Do we really need to run this on externs?
-    TranspilationPasses.processTranspile(compiler, externs, features, this);
     TranspilationPasses.processTranspile(compiler, root, features, this);
   }
 
@@ -144,7 +142,8 @@ public final class Es6RewriteClassExtendsExpressions extends NodeTraversal.Abstr
         IR.constNode(IR.name(name), originalExtends)
             .useSourceInfoIfMissingFromForTree(originalExtends);
     statement.getParent().addChildBefore(extendsAlias, statement);
-    NodeUtil.addFeatureToScript(NodeUtil.getEnclosingScript(classNode), Feature.CONST_DECLARATIONS);
+    NodeUtil.addFeatureToScript(
+        NodeUtil.getEnclosingScript(classNode), Feature.CONST_DECLARATIONS, compiler);
     t.reportCodeChange(classNode);
   }
 

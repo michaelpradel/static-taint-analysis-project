@@ -51,6 +51,12 @@ public final class AllType extends JSType {
 
   AllType(JSTypeRegistry registry) {
     super(registry);
+    this.eagerlyResolveToSelf();
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.ALL;
   }
 
   @Override
@@ -76,8 +82,8 @@ public final class AllType extends JSType {
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append("*");
+  void appendTo(TypeStringBuilder sb) {
+    sb.append("*");
   }
 
   @Override
@@ -105,8 +111,8 @@ public final class AllType extends JSType {
   }
 
   @Override
-  JSType resolveInternal(ErrorReporter reporter) {
-    return this;
+  final JSType resolveInternal(ErrorReporter reporter) {
+    throw new AssertionError();
   }
 
   @Override

@@ -27,7 +27,6 @@ import org.junit.runners.JUnit4;
  * Tests {@link RemoveUnusedCode} for functionality that was previously implemented in NameAnalyzer
  * aka smartNamePass, which has now been removed.
  */
-
 @RunWith(JUnit4.class)
 public final class RemoveUnusedCodeNameAnalyzerTest extends CompilerTestCase {
 
@@ -108,7 +107,8 @@ public final class RemoveUnusedCodeNameAnalyzerTest extends CompilerTestCase {
   @Before
   public void setUp() throws Exception {
     super.setUp();
-    setAcceptedLanguage(LanguageMode.ECMASCRIPT_2017);
+    // Allow testing of features that aren't fully supported for output yet.
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
     enableNormalize();
     enableGatherExternProperties();
     onlyValidateNoNewGettersAndSetters();
@@ -689,6 +689,33 @@ public final class RemoveUnusedCodeNameAnalyzerTest extends CompilerTestCase {
     test(
         "var c = class C {}; use(c);", // preserve newline
         "var c = class   {}; use(c);");
+  }
+
+  @Test
+  public void testInnerClassNameInstanceofCheck() {
+    testSame(
+        lines(
+            "", //
+            "window.Class = class MyClass {",
+            "  constructor() {",
+            "    if (this instanceof MyClass) {",
+            "      console.log(\"test\");",
+            "    }",
+            "  }",
+            "};",
+            "new window.Class();",
+            ""));
+    testSame(
+        lines(
+            "", //
+            "/** @constructor */",
+            "window.Class = function MyClass() {",
+            "  if (this instanceof MyClass) {",
+            "    console.log(\"test\");",
+            "  }",
+            "};",
+            "new window.Class();",
+            ""));
   }
 
   @Test

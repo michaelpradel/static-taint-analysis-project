@@ -16,6 +16,9 @@
 
 package com.google.javascript.jscomp.parsing.parser.util.format;
 
+import static java.lang.Math.max;
+import static java.lang.Math.min;
+
 import com.google.common.base.Ascii;
 import java.util.Arrays;
 import java.util.Date;
@@ -441,8 +444,7 @@ public final class SimpleFormat {
               || arg instanceof Long
               || arg instanceof Short
               || arg instanceof Byte) {
-            String result = arg.toString();
-            return result;
+            return arg.toString();
           }
       }
     }
@@ -568,7 +570,7 @@ public final class SimpleFormat {
 
     int length = source.length();
     if (precision >= 0) {
-      length = Math.min(length, precision);
+      length = min(length, precision);
       if (source instanceof StringBuilder) {
         ((StringBuilder) source).setLength(length);
       } else {
@@ -576,7 +578,7 @@ public final class SimpleFormat {
       }
     }
     if (width > 0) {
-      width = Math.max(source.length(), width);
+      width = max(source.length(), width);
     }
     if (length >= width) {
       return source;
@@ -958,7 +960,7 @@ public final class SimpleFormat {
           }
           // k$ stands for the argument whose index is k-1 except that
           // 0$ and 1$ both stand for the first element.
-          token.setArgIndex(Math.max(0, number - 1));
+          token.setArgIndex(max(0, number - 1));
         } else {
           if (ch == '0') {
             // The digit zero is a format flag, so reparse it as such.

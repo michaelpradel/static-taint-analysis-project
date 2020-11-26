@@ -25,7 +25,6 @@ import org.junit.runners.JUnit4;
 /**
  * Test case for {@link Es6RewriteBlockScopedDeclaration}.
  *
- * @author moz@google.com (Michael Zhou)
  */
 @RunWith(JUnit4.class)
 public final class Es6RewriteBlockScopedDeclarationTest extends CompilerTestCase {
@@ -1572,10 +1571,5 @@ public final class Es6RewriteBlockScopedDeclarationTest extends CompilerTestCase
         "    }",
         "  } catch (e$2) { e$2--; }",
         "}"));
-  }
-
-  @Test
-  public void testExterns() {
-    testExternChanges("let x;", "", "var x;");
   }
 }

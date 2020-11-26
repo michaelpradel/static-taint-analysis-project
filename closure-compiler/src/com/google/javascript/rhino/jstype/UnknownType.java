@@ -55,7 +55,13 @@ public class UnknownType extends ObjectType {
 
   UnknownType(JSTypeRegistry registry, boolean isChecked) {
     super(registry);
+    this.eagerlyResolveToSelf();
     this.isChecked = isChecked;
+  }
+
+  @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.UNKNOWN;
   }
 
   @Override
@@ -118,8 +124,8 @@ public class UnknownType extends ObjectType {
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(getReferenceName());
+  void appendTo(TypeStringBuilder sb) {
+    sb.append(getReferenceName());
   }
 
   @Override
@@ -160,8 +166,8 @@ public class UnknownType extends ObjectType {
   }
 
   @Override
-  JSType resolveInternal(ErrorReporter reporter) {
-    return this;
+  final JSType resolveInternal(ErrorReporter reporter) {
+    throw new AssertionError();
   }
 
   @Override

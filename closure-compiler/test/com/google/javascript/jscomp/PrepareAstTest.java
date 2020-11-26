@@ -19,6 +19,7 @@ package com.google.javascript.jscomp;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.truth.Truth.assertThat;
 
+import com.google.javascript.jscomp.CompilerOptions.LanguageMode;
 import com.google.javascript.rhino.Node;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -27,7 +28,6 @@ import org.junit.runners.JUnit4;
 /**
  * Tests for PrepareAst.
  *
- * @author nicksantos@google.com (Nick Santos)
  */
 @RunWith(JUnit4.class)
 public final class PrepareAstTest extends CompilerTestCase {
@@ -59,4 +59,31 @@ public final class PrepareAstTest extends CompilerTestCase {
 
     assertThat(call.getBooleanProp(Node.FREE_CALL)).isFalse();
   }
+
+  @Test
+  public void optionalFreeCall1() {
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
+    Node root = parseExpectedJs("foo?.();");
+    Node script = root.getFirstChild();
+    checkState(script.isScript());
+    Node firstExpr = script.getFirstChild();
+    Node call = firstExpr.getFirstChild();
+    checkState(call.isOptChainCall());
+
+    assertThat(call.getBooleanProp(Node.FREE_CALL)).isTrue();
+  }
+
+  @Test
+  public void optionalChainFreeCall() {
+    setAcceptedLanguage(LanguageMode.ECMASCRIPT_NEXT_IN);
+    Node root = parseExpectedJs("x?.foo();");
+    Node script = root.getFirstChild();
+    checkState(script.isScript());
+    Node firstExpr = script.getFirstChild();
+    Node call = firstExpr.getFirstChild();
+    checkState(call.isOptChainCall());
+
+    assertThat(call.getBooleanProp(Node.FREE_CALL)).isFalse();
+  }
 }
+

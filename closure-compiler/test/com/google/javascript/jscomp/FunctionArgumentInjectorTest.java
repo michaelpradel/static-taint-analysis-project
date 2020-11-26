@@ -17,7 +17,7 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.javascript.jscomp.CompilerOptions.LanguageMode.ECMASCRIPT_2017;
+import static com.google.javascript.jscomp.CompilerOptions.LanguageMode.ECMASCRIPT_NEXT_IN;
 import static com.google.javascript.jscomp.NodeUtil.getFunctionBody;
 import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 
@@ -35,7 +35,6 @@ import org.junit.runners.JUnit4;
 /**
  * Tests for the static methods in {@link FunctionArgumentInjector}.
  *
- * @author johnlenz@google.com (John Lenz)
  */
 @RunWith(JUnit4.class)
 public final class FunctionArgumentInjectorTest {
@@ -49,7 +48,7 @@ public final class FunctionArgumentInjectorTest {
   public void setUp() {
     compiler = new Compiler();
     CompilerOptions options = new CompilerOptions();
-    options.setLanguageIn(ECMASCRIPT_2017);
+    options.setLanguageIn(ECMASCRIPT_NEXT_IN);
 
     compiler.initOptions(options);
     functionArgumentInjector = new FunctionArgumentInjector(compiler.getAstAnalyzer());
@@ -243,13 +242,21 @@ public final class FunctionArgumentInjectorTest {
   }
 
   @Test
+  public void testMaybeAddTempsForCallArguments1_optionalChaining() {
+    // Parameters with side-effects must be executed even if they aren't referenced.
+    testNeededTemps("function foo(a,b){}; foo?.(goo(),goo());", "foo", ImmutableSet.of("a", "b"));
+  }
+
+  @Test
   public void testMaybeAddTempsForCallArguments2() {
-    // Unreferenced parameters without side-effects
-    // can be ignored.
-    testNeededTemps(
-        "function foo(a,b){}; foo(1,2);",
-        "foo",
-        EMPTY_STRING_SET);
+    // Unreferenced parameters without side-effects can be ignored.
+    testNeededTemps("function foo(a,b){}; foo(1,2);", "foo", EMPTY_STRING_SET);
+  }
+
+  @Test
+  public void testMaybeAddTempsForCallArguments2_optionalChaining() {
+    // Unreferenced parameters without side-effects can be ignored.
+    testNeededTemps("function foo(a,b){}; foo?.(1,2);", "foo", EMPTY_STRING_SET);
   }
 
   @Test
@@ -263,6 +270,12 @@ public final class FunctionArgumentInjectorTest {
   }
 
   @Test
+  public void testMaybeAddTempsForCallArguments3_optionalChaining() {
+    // Referenced parameters without side-effects don't need temps.
+    testNeededTemps("function foo(a,b){a;b;}; foo?.(x,y);", "foo", EMPTY_STRING_SET);
+  }
+
+  @Test
   public void testMaybeAddTempsForCallArguments4() {
     // Parameters referenced after side-effect must
     // be assigned to temps.
@@ -270,6 +283,21 @@ public final class FunctionArgumentInjectorTest {
         "function foo(a,b){a;goo();b;}; foo(x,y);",
         "foo",
         ImmutableSet.of("b"));
+  }
+
+  @Test
+  public void testBodyHasConditionalCode() {
+    testNeededTemps("function foo(a,b){a;goo?.();b;}; foo(x,y);", "foo", EMPTY_STRING_SET);
+
+    testNeededTemps("function foo(a,b){a; p&&q; b;}; foo(x,y);", "foo", EMPTY_STRING_SET);
+
+    testNeededTemps("function foo(a,b){a; p?q:r; b;}; foo(x,y);", "foo", EMPTY_STRING_SET);
+  }
+
+  @Test
+  public void testMaybeAddTempsForCallArguments4_optionalChaining() {
+    // Parameters referenced after side-effect must be assigned to temps.
+    testNeededTemps("function foo(a,b){a;goo();b;}; foo?.(x,y);", "foo", ImmutableSet.of("b"));
   }
 
   @Test
@@ -283,6 +311,12 @@ public final class FunctionArgumentInjectorTest {
   }
 
   @Test
+  public void testMaybeAddTempsForCallArguments5_optionalChaining() {
+    // Parameters referenced after out-of-scope side-effect must be assigned to temps.
+    testNeededTemps("function foo(a,b){x = b; y = a;}; foo?.(x,y);", "foo", ImmutableSet.of("a"));
+  }
+
+  @Test
   public void testMaybeAddTempsForCallArguments6() {
     // Parameter referenced after a out-of-scope side-effect must
     // be assigned to a temp.
@@ -290,6 +324,12 @@ public final class FunctionArgumentInjectorTest {
         "function foo(a){x++;a;}; foo(x);",
         "foo",
         ImmutableSet.of("a"));
+  }
+
+  @Test
+  public void testMaybeAddTempsForCallArguments6_optionalChaining() {
+    // Parameter referenced after a out-of-scope side-effect must be assigned to a temp.
+    testNeededTemps("function foo(a){x++;a;}; foo?.(x);", "foo", ImmutableSet.of("a"));
   }
 
   @Test
@@ -321,11 +361,27 @@ public final class FunctionArgumentInjectorTest {
   }
 
   @Test
+  public void testMaybeAddTempsForCallArguments8_optionalChaining() {
+    // Temp needed for side-effects to object using local name.
+    testNeededTemps(
+        "function foo(a){var c = {}; c.goo=0; a;}; foo?.(x);", "foo", ImmutableSet.of("a"));
+  }
+
+  @Test
   public void testMaybeAddTempsForCallArguments9() {
     // Parameters referenced in a loop with side-effects must
     // be assigned to temps.
     testNeededTemps(
         "function foo(a,b){while(true){a;goo();b;}}; foo(x,y);",
+        "foo",
+        ImmutableSet.of("a", "b"));
+  }
+
+  @Test
+  public void testMaybeAddTempsForCallArguments9_optionalChaining() {
+    // Parameters referenced in a loop with side-effects must be assigned to temps.
+    testNeededTemps(
+        "function foo(a,b){while(true){a;goo();b;}}; foo?.(x,y);",
         "foo",
         ImmutableSet.of("a", "b"));
   }
@@ -350,6 +406,13 @@ public final class FunctionArgumentInjectorTest {
   }
 
   @Test
+  public void testMaybeAddTempsForCallArguments11_optionalChaining() {
+    // Parameters referenced in a loop with side-effects must be assigned to temps.
+    testNeededTemps(
+        "function foo(a,b){do{a;b;}while(goo());}; foo?.(x,y);", "foo", ImmutableSet.of("a", "b"));
+  }
+
+  @Test
   public void testMaybeAddTempsForCallArguments12() {
     // Parameters referenced in a loop with side-effects must
     // be assigned to temps.
@@ -365,6 +428,16 @@ public final class FunctionArgumentInjectorTest {
     // be assigned to temps if the outer loop has side-effects.
     testNeededTemps(
         "function foo(a,b){for(;;){for(;;){a;b;}goo();}}; foo(x,y);",
+        "foo",
+        ImmutableSet.of("a", "b"));
+  }
+
+  @Test
+  public void testMaybeAddTempsForCallArguments13_optionalChaining() {
+    // Parameters referenced in a inner loop without side-effects must be assigned to temps if the
+    // outer loop has side-effects.
+    testNeededTemps(
+        "function foo(a,b){for(;;){for(;;){a;b;}goo();}}; foo?.(x,y);",
         "foo",
         ImmutableSet.of("a", "b"));
   }
@@ -428,6 +501,13 @@ public final class FunctionArgumentInjectorTest {
         "function foo(a){a(this)}; foo.call(f(),g());",
         "foo",
         ImmutableSet.of("a", "this"));
+  }
+
+  @Test
+  public void testMaybeAddTempsForCallArguments22b_optionalChaining() {
+    // A object literal not referenced.
+    testNeededTemps(
+        "function foo(a){a(this)}; foo?.call(f(),g());", "foo", ImmutableSet.of("a", "this"));
   }
 
   @Test
@@ -592,6 +672,12 @@ public final class FunctionArgumentInjectorTest {
   }
 
   @Test
+  public void nullishCoalesce() {
+    testNeededTemps(
+        "function foo(...args) {return args ?? x;} foo(1, 2);", "foo", ImmutableSet.of("args"));
+  }
+
+  @Test
   public void testMaybeAddTempsForCallArgumentsRestParam1() {
     testNeededTemps("function foo(...args) {return args;} foo(1, 2);", "foo", EMPTY_STRING_SET);
   }
@@ -648,9 +734,9 @@ public final class FunctionArgumentInjectorTest {
   }
 
   private static Node findCall(Node n, String name) {
-    if (n.isCall()) {
+    if (NodeUtil.isNormalOrOptChainCall(n)) {
       Node callee;
-      if (NodeUtil.isGet(n.getFirstChild())) {
+      if (NodeUtil.isNormalOrOptChainGet(n.getFirstChild())) {
         callee = n.getFirstFirstChild();
         Node prop = callee.getNext();
         // Only "call" is supported at this point.
@@ -700,5 +786,4 @@ public final class FunctionArgumentInjectorTest {
     assertThat(compiler.getErrors()).isEmpty();
     return n;
   }
-
 }

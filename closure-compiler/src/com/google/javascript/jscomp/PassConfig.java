@@ -16,13 +16,10 @@
 
 package com.google.javascript.jscomp;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.javascript.jscomp.graph.GraphvizGraph;
 import com.google.javascript.jscomp.graph.LinkedDirectedGraph;
-import com.google.javascript.rhino.Node;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -42,39 +39,24 @@ public abstract class PassConfig {
     this.options = options;
   }
 
-  /**
-   * Regenerates the top scope from scratch.
-   *
-   * @param compiler The compiler for which the global scope is regenerated.
-   * @param root The root of the AST.
-   */
-  void regenerateGlobalTypedScope(AbstractCompiler compiler, Node root) {
-    typedScopeCreator = new TypedScopeCreator(compiler);
-    topScope = typedScopeCreator.createScope(root, null);
+  void clearTypedScopeCreator() {
+    typedScopeCreator = null;
   }
 
-  void clearTypedScope() {
-    typedScopeCreator = null;
+  void clearTopTypedScope() {
     topScope = null;
   }
 
-  /**
-   * Regenerates the top scope potentially only for a sub-tree of AST and then
-   * copies information for the old global scope.
-   *
-   * @param compiler The compiler for which the global scope is generated.
-   * @param scriptRoot The root of the AST used to generate global scope.
-   */
-  void patchGlobalTypedScope(AbstractCompiler compiler, Node scriptRoot) {
-    checkNotNull(typedScopeCreator);
-    typedScopeCreator.patchGlobalScope(topScope, scriptRoot);
+  /** Gets the scope creator for typed scopes. */
+  TypedScopeCreator getTypedScopeCreator() {
+    return this.typedScopeCreator;
   }
 
-  /**
-   * Gets the scope creator for typed scopes.
-   */
-  TypedScopeCreator getTypedScopeCreator() {
-    return typedScopeCreator;
+  TypedScopeCreator getTypedScopeCreator(AbstractCompiler copmiler) {
+    if (this.typedScopeCreator == null) {
+      this.typedScopeCreator = new TypedScopeCreator(copmiler);
+    }
+    return this.typedScopeCreator;
   }
 
   /**
@@ -90,12 +72,12 @@ public abstract class PassConfig {
    * not to have any processing - specifically introduced to support goog.module() usage.
    */
   protected List<PassFactory> getWhitespaceOnlyPasses() {
-    return Collections.emptyList();
+    return ImmutableList.of();
   }
 
   /** Gets the transpilation passes */
   protected List<PassFactory> getTranspileOnlyPasses() {
-    return Collections.emptyList();
+    return ImmutableList.of();
   }
 
   /**
@@ -149,19 +131,6 @@ public abstract class PassConfig {
       lastPass = passName;
     }
     return graph;
-  }
-
-  /**
-   * Create a type inference pass.
-   */
-  final TypeInferencePass makeTypeInference(AbstractCompiler compiler) {
-    return new TypeInferencePass(
-        compiler, compiler.getReverseAbstractInterpreter(),
-        topScope, typedScopeCreator);
-  }
-
-  static final InferJSDocInfo makeInferJsDocInfo(AbstractCompiler compiler) {
-    return new InferJSDocInfo(compiler);
   }
 
   /**
@@ -223,15 +192,12 @@ public abstract class PassConfig {
     return current;
   }
 
-  /**
-   * An implementation of PassConfig that just proxies all its method calls
-   * into an inner class.
-   */
-  static class PassConfigDelegate extends PassConfig {
+  /** An implementation of PassConfig that just proxies all its method calls into an inner class. */
+  public static class PassConfigDelegate extends PassConfig {
 
     private final PassConfig delegate;
 
-    PassConfigDelegate(PassConfig delegate) {
+    protected PassConfigDelegate(PassConfig delegate) {
       super(delegate.options);
       this.delegate = delegate;
     }
@@ -259,6 +225,16 @@ public abstract class PassConfig {
 
     @Override TypedScope getTopScope() {
       return delegate.getTopScope();
+    }
+
+    @Override
+    void clearTypedScopeCreator() {
+      delegate.clearTypedScopeCreator();
+    }
+
+    @Override
+    void clearTopTypedScope() {
+      delegate.clearTopTypedScope();
     }
   }
 }

@@ -41,9 +41,13 @@ package com.google.javascript.rhino;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.javascript.rhino.testing.NodeSubject.assertNode;
 
+import com.google.common.collect.ImmutableSet;
+import com.google.javascript.jscomp.colors.ColorRegistry;
+import com.google.javascript.jscomp.colors.NativeColorId;
 import com.google.javascript.rhino.jstype.JSTypeNative;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.testing.TestErrorReporter;
+import java.math.BigInteger;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -70,6 +74,18 @@ public class NodeTest {
     int linecharno = Node.mergeLineCharNo(89, 4096);
     assertThat(Node.extractLineno(linecharno)).isEqualTo(89);
     assertThat(Node.extractCharno(linecharno)).isEqualTo(4095);
+  }
+
+  @Test
+  public void isEquivalentToConsidersStartOfOptionalChainProperty() {
+    // `a?.b.c`
+    Node singleSegmentOptChain = IR.continueOptChainGetprop(
+        IR.startOptChainGetprop(IR.name("a"), IR.string("b")), IR.string("c"));
+    assertNode(singleSegmentOptChain).isEquivalentTo(singleSegmentOptChain.cloneTree());
+
+    Node twoSegmentOptChain = singleSegmentOptChain.cloneTree();
+    twoSegmentOptChain.setIsOptionalChainStart(true);
+    assertNode(singleSegmentOptChain).isNotEquivalentTo(twoSegmentOptChain);
   }
 
   @Test
@@ -137,14 +153,35 @@ public class NodeTest {
   }
 
   @Test
+  public void testIsEquivalentToNumber() {
+    assertThat(Node.newNumber(1).isEquivalentTo(Node.newNumber(1))).isTrue();
+    assertThat(Node.newNumber(1).isEquivalentTo(Node.newNumber(2))).isFalse();
+  }
+
+  @Test
+  public void testIsEquivalentToBigInt() {
+    assertThat(Node.newBigInt(BigInteger.ONE).isEquivalentTo(Node.newBigInt(BigInteger.ONE)))
+        .isTrue();
+    assertThat(Node.newBigInt(BigInteger.ONE).isEquivalentTo(Node.newBigInt(BigInteger.TEN)))
+        .isFalse();
+  }
+
+  @Test
+  public void testIsEquivalentToString() {
+    assertThat(Node.newString("1").isEquivalentTo(Node.newString("1"))).isTrue();
+    assertThat(Node.newString("1").isEquivalentTo(Node.newString("2"))).isFalse();
+  }
+
+  @Test
   public void testCheckTreeTypeAwareEqualsSame() {
-    TestErrorReporter testErrorReporter = new TestErrorReporter(null, null);
+    TestErrorReporter testErrorReporter = new TestErrorReporter();
     JSTypeRegistry registry = new JSTypeRegistry(testErrorReporter);
     Node node1 = Node.newString(Token.NAME, "f");
     node1.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
     Node node2 = Node.newString(Token.NAME, "f");
     node2.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
     assertThat(node1.isEquivalentToTyped(node2)).isTrue();
+    testErrorReporter.verifyHasEncounteredAllWarningsAndErrors();
   }
 
   @Test
@@ -156,42 +193,62 @@ public class NodeTest {
 
   @Test
   public void testCheckTreeTypeAwareEqualsDifferent() {
-    TestErrorReporter testErrorReporter = new TestErrorReporter(null, null);
+    TestErrorReporter testErrorReporter = new TestErrorReporter();
     JSTypeRegistry registry = new JSTypeRegistry(testErrorReporter);
     Node node1 = Node.newString(Token.NAME, "f");
     node1.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
     Node node2 = Node.newString(Token.NAME, "f");
     node2.setJSType(registry.getNativeType(JSTypeNative.STRING_TYPE));
     assertThat(node1.isEquivalentToTyped(node2)).isFalse();
+    testErrorReporter.verifyHasEncounteredAllWarningsAndErrors();
   }
 
   @Test
   public void testCheckTreeTypeAwareEqualsDifferentNull() {
-    TestErrorReporter testErrorReporter = new TestErrorReporter(null, null);
+    TestErrorReporter testErrorReporter = new TestErrorReporter();
     JSTypeRegistry registry = new JSTypeRegistry(testErrorReporter);
     Node node1 = Node.newString(Token.NAME, "f");
     node1.setJSType(registry.getNativeType(JSTypeNative.NUMBER_TYPE));
     Node node2 = Node.newString(Token.NAME, "f");
     assertThat(node1.isEquivalentToTyped(node2)).isFalse();
+    testErrorReporter.verifyHasEncounteredAllWarningsAndErrors();
   }
 
   @Test
-  public void testVarArgs1() {
-    assertThat(new Node(Token.LET).isVarArgs()).isFalse();
+  public void testCheckTreeTypeAwareEqualsColorsSame() {
+    ColorRegistry colorRegistry = ColorRegistry.createWithInvalidatingNatives(ImmutableSet.of());
+
+    Node node1 = Node.newString(Token.NAME, "f");
+    node1.setColor(colorRegistry.get(NativeColorId.NUMBER));
+    Node node2 = Node.newString(Token.NAME, "f");
+    node2.setColor(colorRegistry.get(NativeColorId.NUMBER));
+    assertThat(node1.isEquivalentToTyped(node2)).isTrue();
   }
 
   @Test
-  public void testVarArgs2() {
-    Node n = new Node(Token.LET);
-    n.setVarArgs(false);
-    assertThat(n.isVarArgs()).isFalse();
+  public void testCheckTreeTypeAwareEqualsColorsSameNull() {
+    Node node1 = Node.newString(Token.NAME, "f");
+    Node node2 = Node.newString(Token.NAME, "f");
+    assertThat(node1.isEquivalentToTyped(node2)).isTrue();
   }
 
   @Test
-  public void testVarArgs3() {
-    Node n = new Node(Token.LET);
-    n.setVarArgs(true);
-    assertThat(n.isVarArgs()).isTrue();
+  public void testCheckTreeTypeAwareEqualsColorsDifferent() {
+    ColorRegistry colorRegistry = ColorRegistry.createWithInvalidatingNatives(ImmutableSet.of());
+    Node node1 = Node.newString(Token.NAME, "f");
+    node1.setColor(colorRegistry.get(NativeColorId.NUMBER));
+    Node node2 = Node.newString(Token.NAME, "f");
+    node2.setColor(colorRegistry.get(NativeColorId.STRING));
+    assertThat(node1.isEquivalentToTyped(node2)).isFalse();
+  }
+
+  @Test
+  public void testCheckTreeTypeAwareEqualsColorsDifferentNull() {
+    ColorRegistry colorRegistry = ColorRegistry.createWithInvalidatingNatives(ImmutableSet.of());
+    Node node1 = Node.newString(Token.NAME, "f");
+    node1.setColor(colorRegistry.get(NativeColorId.NUMBER));
+    Node node2 = Node.newString(Token.NAME, "f");
+    assertThat(node1.isEquivalentToTyped(node2)).isFalse();
   }
 
   private void testMergeExtract(int lineno, int charno) {
@@ -559,7 +616,7 @@ public class NodeTest {
   @Test
   public void testJSDocInfoClone() {
     Node original = IR.var(IR.name("varName"));
-    JSDocInfoBuilder builder = new JSDocInfoBuilder(false);
+    JSDocInfoBuilder builder = JSDocInfo.builder();
     builder.recordType(new JSTypeExpression(IR.name("TypeName"), "blah"));
     JSDocInfo info = builder.build();
     original.getFirstChild().setJSDocInfo(info);
@@ -654,6 +711,13 @@ public class NodeTest {
   public void testGetAncestors_empty() {
     Node node = new Node(Token.ROOT);
     assertThat(node.getAncestors()).isEmpty();
+  }
+
+  @Test
+  public void testTrailingComma() {
+    Node list = new Node(Token.ARRAYLIT);
+    list.setTrailingComma(true);
+    assertNode(list).hasTrailingComma();
   }
 
   private static Node getVarRef(String name) {

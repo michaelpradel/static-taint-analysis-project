@@ -39,7 +39,7 @@
 
 package com.google.javascript.rhino.jstype;
 
-import static com.google.javascript.rhino.jstype.ObjectType.PropertyOptionality.VOIDABLE_PROPS_ARE_OPTIONAL;
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.javascript.rhino.jstype.TernaryValue.FALSE;
 import static com.google.javascript.rhino.jstype.TernaryValue.UNKNOWN;
 
@@ -47,6 +47,7 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.javascript.rhino.JSDocInfo;
 import com.google.javascript.rhino.Node;
@@ -55,7 +56,6 @@ import java.io.Serializable;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
 import javax.annotation.Nullable;
 
 /**
@@ -200,7 +200,7 @@ public abstract class ObjectType extends JSType implements Serializable {
    *
    * <p>Returning an empty string means something different than returning null. An empty string may
    * indicate an anonymous constructor, which we treat differently than a literal type without a
-   * reference name. e.g. in {@link InstanceObjectType#appendTo(StringBuilder, boolean)}
+   * reference name. e.g. in {@link InstanceObjectType#appendTo(TypeStringBuilder)}
    *
    * @return the object's name or {@code null} if this is an anonymous object
    */
@@ -255,10 +255,6 @@ public abstract class ObjectType extends JSType implements Serializable {
     return "(" + suffix + ")";
   }
 
-  public boolean isAmbiguousObject() {
-    return !hasReferenceName();
-  }
-
   public final ObjectType getRawType() {
     TemplatizedType t = toMaybeTemplatizedType();
     return t == null ? this : t.getReferencedType();
@@ -281,7 +277,8 @@ public abstract class ObjectType extends JSType implements Serializable {
         || that.isSubtypeOf(getNativeType(JSTypeNative.NUMBER_TYPE))
         || that.isSubtypeOf(getNativeType(JSTypeNative.STRING_TYPE))
         || that.isSubtypeOf(getNativeType(JSTypeNative.BOOLEAN_TYPE))
-        || that.isSubtypeOf(getNativeType(JSTypeNative.SYMBOL_TYPE))) {
+        || that.isSubtypeOf(getNativeType(JSTypeNative.SYMBOL_TYPE))
+        || that.isSubtypeOf(getNativeType(JSTypeNative.BIGINT_TYPE))) {
       return UNKNOWN;
     }
     return FALSE;
@@ -399,12 +396,14 @@ public abstract class ObjectType extends JSType implements Serializable {
         // We never want to hide a declared property with an inferred property.
         return true;
       }
-      JSType originalType = getPropertyType(propertyName);
-      type = originalType == null ? type : originalType.getLeastSupertype(type);
+      JSType originalType = checkNotNull(getPropertyType(propertyName));
+      type = originalType.getLeastSupertype(type);
     }
+    // TODO(b/140764208): verify that if isResolved() then type.isResolved().
+    // Defining unresolved properties on resolved types is dangerous because the property type
+    // may never be resolved.
 
-    boolean result = defineProperty(propertyName, type, true,
-        propertyNode);
+    boolean result = defineProperty(propertyName, type, true, propertyNode);
 
     // All property definitions go through this method
     // or defineDeclaredProperty. Because the properties defined an an
@@ -608,108 +607,9 @@ public abstract class ObjectType extends JSType implements Serializable {
     return getPropertyMap().getPropertiesCount();
   }
 
-  /**
-   * Check for structural equivalence with {@code that}.
-   * (e.g. two @record types with the same prototype properties)
-   */
-  final boolean checkStructuralEquivalenceHelper(
-      ObjectType otherObject, EquivalenceMethod eqMethod, EqCache eqCache) {
-    if (this.isTemplatizedType() && this.toMaybeTemplatizedType().wrapsSameRawType(otherObject)) {
-      return this.getTemplateTypeMap().checkEquivalenceHelper(
-          otherObject.getTemplateTypeMap(), eqMethod, eqCache, SubtypingMode.NORMAL);
-    }
-
-    MatchStatus result = eqCache.checkCache(this, otherObject);
-    if (result != null) {
-      return result.subtypeValue();
-    }
-    Set<String> keySet = getPropertyNames();
-    Set<String> otherKeySet = otherObject.getPropertyNames();
-    if (!otherKeySet.equals(keySet)) {
-      eqCache.updateCache(this, otherObject, MatchStatus.NOT_MATCH);
-      return false;
-    }
-    for (String key : keySet) {
-      if (!otherObject.getPropertyType(key).checkEquivalenceHelper(
-              getPropertyType(key), eqMethod, eqCache)) {
-        eqCache.updateCache(this, otherObject, MatchStatus.NOT_MATCH);
-        return false;
-      }
-    }
-    eqCache.updateCache(this, otherObject, MatchStatus.MATCH);
-    return true;
-  }
-
-  static boolean isStructuralSubtypeHelper(
-      ObjectType subtype,
-      ObjectType supertype,
-      ImplCache implicitImplCache,
-      SubtypingMode subtypingMode,
-      PropertyOptionality optionality) {
-
-    MatchStatus cachedResult = implicitImplCache.checkCache(subtype, supertype);
-    if (cachedResult != null) {
-      return cachedResult.subtypeValue();
-    }
-
-    // subtype is a subtype of record type supertype iff:
-    // 1) subtype has all the non-optional properties declared in supertype.
-    // 2) And for each property of supertype, its type must be
-    //    a super type of the corresponding property of subtype.
-
-    Iterable<String> props =
-        // NOTE: Inline record literal types always have Object as a supertype. In these cases, we
-        // really only care about the properties explicitly declared in the record literal, and not
-        // about any properties inherited from Object.prototype. On the other hand, @record types
-        // allow inheritance and we need to match against inherited properties as well.
-        supertype.isRecordType() ? supertype.getOwnPropertyNames() : supertype.getPropertyNames();
-
-    boolean result = true;
-    for (String property : props) {
-      JSType supertypeProp = supertype.getPropertyType(property);
-      if (subtype.hasProperty(property)) {
-        JSType subtypeProp = subtype.getPropertyType(property);
-        if (!subtypeProp.isSubtype(supertypeProp, implicitImplCache, subtypingMode)) {
-          result = false;
-          break;
-        }
-      } else if (!optionality.isOptional(supertypeProp)) {
-        // Currently, any type that explicitly includes undefined (eg, `?|undefined`) is optional.
-        result = false;
-        break;
-      }
-    }
-
-    return implicitImplCache.updateCache(subtype, supertype, MatchStatus.valueOf(result));
-  }
-
-  /** How to treat explicitly voidable properties for structural subtype checking. */
-  enum PropertyOptionality {
-    /** Explicitly voidable properties are treated as optional. */
-    VOIDABLE_PROPS_ARE_OPTIONAL,
-    /** All properties are always required, even if explicitly voidable. */
-    ALL_PROPS_ARE_REQUIRED;
-
-    boolean isOptional(JSType propType) {
-      return this == VOIDABLE_PROPS_ARE_OPTIONAL && propType.isExplicitlyVoidable();
-    }
-  }
-
-  /**
-   * Returns a list of properties defined or inferred on this type and any of
-   * its supertypes.
-   */
-  public final Set<String> getPropertyNames() {
-    Set<String> props = new TreeSet<>();
-    collectPropertyNames(props);
-    return props;
-  }
-
-  /**
-   * Adds any properties defined on this type or its supertypes to the set.
-   */
-  final void collectPropertyNames(Set<String> props) {
-    getPropertyMap().collectPropertyNames(props);
+  /** Returns a list of properties defined or inferred on this type and any of its supertypes. */
+  public final ImmutableSortedSet<String> getPropertyNames() {
+    return getPropertyMap().keySet();
   }
 
   @Override
@@ -733,7 +633,7 @@ public abstract class ObjectType extends JSType implements Serializable {
         other != null;
         other = deeplyUnwrap(other.getImplicitPrototype())) {
       // The prototype should match exactly.
-      // NOTE: the use of "==" here rather than isEquivalentTo is deliberate.  This method
+      // NOTE: the use of "==" here rather than equals is deliberate.  This method
       // is very hot in the type checker and relying on identity improves performance of both
       // type checking/type inferrence and property disambiguation.
       if (JSType.areIdentical(unwrappedThis, other)) {

@@ -30,10 +30,12 @@
  */
 
 /**
+ * TODO(b/142881197): UNUSED_RETURN_T and UNUSED_NEXT_T are not yet used for
+ * anything. https://github.com/google/closure-compiler/issues/3489
  * @interface
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Generator
  * @extends {IteratorIterable<VALUE>}
- * @template VALUE
+ * @template VALUE, UNUSED_RETURN_T, UNUSED_NEXT_T
  */
 function Generator() {}
 
@@ -190,7 +192,7 @@ Math.fround = function(value) {};
  * @nosideeffects
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/is
  */
-Object.is;
+Object.is = function(a, b) {};
 
 
 /**
@@ -340,6 +342,16 @@ String.prototype.trimStart = function() {};
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/trimEnd
  */
 String.prototype.trimEnd = function() {};
+
+
+/**
+ * @this {String|string}
+ * @param {!RegExp|string} regexp
+ * @return {!IteratorIterable<!RegExpResult>}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/matchAll
+ */
+String.prototype.matchAll = function(regexp) {};
 
 
 /**
@@ -560,7 +572,8 @@ TypedArray.prototype.length;
 TypedArray.prototype.map = function(callback, opt_thisArg) {};
 
 /**
- * @param {function((number|INIT|RET), number, number, !TypedArray) : RET} callback
+ * @param {function((number|INIT|RET), number, number, !TypedArray) : RET}
+ *     callback
  * @param {INIT=} opt_initialValue
  * @return {RET}
  * @template INIT,RET
@@ -570,7 +583,8 @@ TypedArray.prototype.map = function(callback, opt_thisArg) {};
 TypedArray.prototype.reduce = function(callback, opt_initialValue) {};
 
 /**
- * @param {function((number|INIT|RET), number, number, !TypedArray) : RET} callback
+ * @param {function((number|INIT|RET), number, number, !TypedArray) : RET}
+ *     callback
  * @param {INIT=} opt_initialValue
  * @return {RET}
  * @template INIT,RET
@@ -979,6 +993,71 @@ Float64Array.of = function(var_args) {};
 
 
 /**
+ * @param {number|ArrayBufferView|Array<bigint>|ArrayBuffer|SharedArrayBuffer}
+ *     lengthOrArrayOrBuffer
+ * @param {number=} byteOffset
+ * @param {number=} bufferLength
+ * @constructor
+ * @extends {TypedArray}
+ * @throws {Error}
+ * @modifies {arguments}
+ */
+function BigInt64Array(lengthOrArrayOrBuffer, byteOffset, bufferLength) {}
+
+/** @const {number} */
+BigInt64Array.BYTES_PER_ELEMENT;
+
+/**
+ * @param {string|!IArrayLike<bigint>|!Iterable<bigint>} source
+ * @param {function(this:S, bigint): bigint=} mapFn
+ * @param {S=} thisArg
+ * @template S
+ * @return {!BigInt64Array}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypedArray/from
+ */
+BigInt64Array.from = function(source, mapFn, thisArg) {};
+
+/**
+ * @param {...bigint} var_args
+ * @return {!BigInt64Array}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypedArray/of
+ */
+BigInt64Array.of = function(var_args) {};
+
+
+/**
+ * @param {number|ArrayBufferView|Array<bigint>|ArrayBuffer|SharedArrayBuffer}
+ *     lengthOrArrayOrBuffer
+ * @param {number=} byteOffset
+ * @param {number=} bufferLength
+ * @constructor
+ * @extends {TypedArray}
+ * @throws {Error}
+ * @modifies {arguments}
+ */
+function BigUint64Array(lengthOrArrayOrBuffer, byteOffset, bufferLength) {}
+
+/** @const {number} */
+BigUint64Array.BYTES_PER_ELEMENT;
+
+/**
+ * @param {string|!IArrayLike<bigint>|!Iterable<bigint>} source
+ * @param {function(this:S, bigint): bigint=} mapFn
+ * @param {S=} thisArg
+ * @template S
+ * @return {!BigUint64Array}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypedArray/from
+ */
+BigUint64Array.from = function(source, mapFn, thisArg) {};
+
+/**
+ * @param {...bigint} var_args
+ * @return {!BigUint64Array}
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypedArray/of
+ */
+BigUint64Array.of = function(var_args) {};
+
+/**
  * @param {ArrayBuffer|SharedArrayBuffer} buffer
  * @param {number=} opt_byteOffset
  * @param {number=} opt_byteLength
@@ -1053,6 +1132,22 @@ DataView.prototype.getFloat64 = function(byteOffset, opt_littleEndian) {};
 
 /**
  * @param {number} byteOffset
+ * @param {boolean=} littleEndian
+ * @return {bigint}
+ * @throws {Error}
+ */
+DataView.prototype.getBigInt64 = function(byteOffset, littleEndian) {};
+
+/**
+ * @param {number} byteOffset
+ * @param {boolean=} littleEndian
+ * @return {bigint}
+ * @throws {Error}
+ */
+DataView.prototype.getBigUint64 = function(byteOffset, littleEndian) {};
+
+/**
+ * @param {number} byteOffset
  * @param {number} value
  * @throws {Error}
  * @return {undefined}
@@ -1122,6 +1217,24 @@ DataView.prototype.setFloat32 = function(
  */
 DataView.prototype.setFloat64 = function(
     byteOffset, value, opt_littleEndian) {};
+
+/**
+ * @param {number} byteOffset
+ * @param {bigint} value
+ * @param {boolean=} littleEndian
+ * @throws {Error}
+ * @return {undefined}
+ */
+DataView.prototype.setBigInt64 = function(byteOffset, value, littleEndian) {};
+
+/**
+ * @param {number} byteOffset
+ * @param {bigint} value
+ * @param {boolean=} littleEndian
+ * @throws {Error}
+ * @return {undefined}
+ */
+DataView.prototype.setBigUint64 = function(byteOffset, value, littleEndian) {};
 
 
 /**
@@ -1629,7 +1742,8 @@ Reflect.apply = function(targetFn, thisArg, argList) {};
  * @template TARGET
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Reflect/construct
  */
-Reflect.construct = function(targetConstructorFn, argList, opt_newTargetConstructorFn) {};
+Reflect.construct = function(
+    targetConstructorFn, argList, opt_newTargetConstructorFn) {};
 
 /**
  * @param {!Object} target
@@ -1738,7 +1852,7 @@ var Atomics = {};
  * @param {number} value
  * @return {number}
  */
-Atomics.add = function(typedArray, index, value) {}
+Atomics.add = function(typedArray, index, value) {};
 
 /**
  * @param {!TypedArray} typedArray
@@ -1746,7 +1860,7 @@ Atomics.add = function(typedArray, index, value) {}
  * @param {number} value
  * @return {number}
  */
-Atomics.and = function(typedArray, index, value) {}
+Atomics.and = function(typedArray, index, value) {};
 
 /**
  * @param {!TypedArray} typedArray
@@ -1755,8 +1869,8 @@ Atomics.and = function(typedArray, index, value) {}
  * @param {number} replacementValue
  * @return {number}
  */
-Atomics.compareExchange = function(typedArray, index, expectedValue,
-    replacementValue) {}
+Atomics.compareExchange = function(
+    typedArray, index, expectedValue, replacementValue) {};
 
 /**
  * @param {!TypedArray} typedArray
@@ -1764,36 +1878,28 @@ Atomics.compareExchange = function(typedArray, index, expectedValue,
  * @param {number} value
  * @return {number}
  */
-Atomics.exchange = function(typedArray, index, value) {}
+Atomics.exchange = function(typedArray, index, value) {};
 
 /**
  * @param {number} size
  * @return {boolean}
  */
-Atomics.isLockFree = function(size) {}
+Atomics.isLockFree = function(size) {};
 
 /**
  * @param {!TypedArray} typedArray
  * @param {number} index
  * @return {number}
  */
-Atomics.load = function(typedArray, index) {}
+Atomics.load = function(typedArray, index) {};
 
 /**
- * @param {!TypedArray} typedArray
+ * @param {!Int32Array} typedArray
  * @param {number} index
- * @param {number} value
+ * @param {number=} count
  * @return {number}
  */
-Atomics.or = function(typedArray, index, value) {}
-
-/**
- * @param {!TypedArray} typedArray
- * @param {number} index
- * @param {number} value
- * @return {number}
- */
-Atomics.store = function(typedArray, index, value) {}
+Atomics.notify = function(typedArray, index, count) {};
 
 /**
  * @param {!TypedArray} typedArray
@@ -1801,7 +1907,23 @@ Atomics.store = function(typedArray, index, value) {}
  * @param {number} value
  * @return {number}
  */
-Atomics.sub = function(typedArray, index, value) {}
+Atomics.or = function(typedArray, index, value) {};
+
+/**
+ * @param {!TypedArray} typedArray
+ * @param {number} index
+ * @param {number} value
+ * @return {number}
+ */
+Atomics.store = function(typedArray, index, value) {};
+
+/**
+ * @param {!TypedArray} typedArray
+ * @param {number} index
+ * @param {number} value
+ * @return {number}
+ */
+Atomics.sub = function(typedArray, index, value) {};
 
 /**
  * @param {!Int32Array} typedArray
@@ -1810,15 +1932,15 @@ Atomics.sub = function(typedArray, index, value) {}
  * @param {number=} timeout
  * @return {String}
  */
-Atomics.wait = function(typedArray, index, value, timeout) {}
+Atomics.wait = function(typedArray, index, value, timeout) {};
 
 /**
  * @param {!Int32Array} typedArray
  * @param {number} index
- * @param {number} count
+ * @param {number=} count
  * @return {number}
  */
-Atomics.wake = function(typedArray, index, count) {}
+Atomics.wake = function(typedArray, index, count) {};
 
 /**
  * @param {!TypedArray} typedArray
@@ -1826,12 +1948,15 @@ Atomics.wake = function(typedArray, index, count) {}
  * @param {number} value
  * @return {number}
  */
-Atomics.xor = function(typedArray, index, value) {}
+Atomics.xor = function(typedArray, index, value) {};
 
 
 /**
+ * TODO(b/142881197): UNUSED_RETURN_T and UNUSED_NEXT_T are not yet used for
+ * anything.
+ * https://github.com/google/closure-compiler/issues/3489
  * @interface
- * @template VALUE
+ * @template VALUE, UNUSED_RETURN_T, UNUSED_NEXT_T
  * @see https://tc39.github.io/proposal-async-iteration/
  */
 function AsyncIterator() {}
@@ -1851,14 +1976,14 @@ function AsyncIterable() {}
 
 
 /**
- * @return {!AsyncIterator<VALUE>}
+ * @return {!AsyncIterator<VALUE, ?, *>}
  */
 AsyncIterable.prototype[Symbol.asyncIterator] = function() {};
 
 
 /**
  * @interface
- * @extends {AsyncIterator<VALUE>}
+ * @extends {AsyncIterator<VALUE, ?, *>}
  * @extends {AsyncIterable<VALUE>}
  * @template VALUE
  * @see https://tc39.github.io/proposal-async-iteration/
@@ -1866,10 +1991,12 @@ AsyncIterable.prototype[Symbol.asyncIterator] = function() {};
 function AsyncIteratorIterable() {}
 
 /**
+ * TODO(b/142881197): UNUSED_RETURN_T and UNUSED_NEXT_T are not yet used for
+ * anything. https://github.com/google/closure-compiler/issues/3489
  * @interface
  * @see https://tc39.github.io/proposal-async-iteration/
  * @extends {AsyncIteratorIterable<VALUE>}
- * @template VALUE
+ * @template VALUE, UNUSED_RETURN_T, UNUSED_NEXT_T
  */
 function AsyncGenerator() {}
 
@@ -1891,3 +2018,24 @@ AsyncGenerator.prototype.return = function(value) {};
  * @return {!Promise<!IIterableResult<VALUE>>}
  */
 AsyncGenerator.prototype.throw = function(exception) {};
+
+/**
+ * @constructor
+ * @struct
+ * @param {TYPE} value
+ * @template TYPE
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WeakRef
+ */
+function WeakRef(value) {}
+
+/**
+ * @return {TYPE}
+ * @nosideeffects
+ */
+WeakRef.prototype.deref = function() {};
+
+/**
+ * @type {!Global}
+ */
+var globalThis;

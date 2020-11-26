@@ -15,13 +15,10 @@
  */
 package com.google.javascript.refactoring.examples;
 
-import static com.google.javascript.refactoring.testing.RefasterJsTestUtils.assertFileRefactoring;
-
-import com.google.common.collect.ImmutableList;
+import com.google.javascript.refactoring.testing.RefasterJsTestCase;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
 
 @RunWith(JUnit4.class)
 public class ChaiExpectToAssertTest {
@@ -31,18 +28,21 @@ public class ChaiExpectToAssertTest {
       "test/"
           + "com/google/javascript/refactoring/examples/testdata";
 
+  private static final String EXTERNS_DIR =
+      ""
+          + "contrib/externs";
+
   /** The RefasterJs template to use. */
   private static final String NAVIGATIONAL_XSS_SINKS_TEMPLATE =
-      "src/" +
       "com/google/javascript/refactoring/examples/refasterjs/chai_expect_to_assert.js";
 
   @Test
   public void test_refactorings() throws Exception {
-    assertFileRefactoring(
-        NAVIGATIONAL_XSS_SINKS_TEMPLATE,
-        TESTDATA_DIR,
-        "chai_expect_to_assert_in.js",
-        ImmutableList.of("../../../../../../../contrib/externs/chai-3.5.js"),
-        "chai_expect_to_assert_out.js");
+    RefasterJsTestCase.builder()
+        .setTemplatePath(NAVIGATIONAL_XSS_SINKS_TEMPLATE)
+        .setInputPath(TESTDATA_DIR + "/chai_expect_to_assert_in.js")
+        .addExpectedOutputPath(TESTDATA_DIR + "/chai_expect_to_assert_out.js")
+        .addAdditionalSourcePath(EXTERNS_DIR + "/chai-3.5.js")
+        .test();
   }
 }

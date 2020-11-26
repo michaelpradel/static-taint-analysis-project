@@ -168,7 +168,7 @@ public final class ControlFlowAnalysis implements Callback, CompilerPass {
     if (shouldTraverseFunctions) {
       // If we're traversing inner functions, we need to rank the
       // priority of them too.
-      for (DiGraphNode<Node, Branch> candidate : cfg.getDirectedGraphNodes()) {
+      for (DiGraphNode<Node, Branch> candidate : cfg.getNodes()) {
         Node value = candidate.getValue();
         if (value != null && value.isFunction()) {
           prioritizeFromEntryNode(candidate);
@@ -180,7 +180,7 @@ public final class ControlFlowAnalysis implements Callback, CompilerPass {
     // unreachable nodes have not been given a priority. Put them last.
     // Presumably, it doesn't really matter what priority they get, since
     // this shouldn't happen in real code.
-    for (DiGraphNode<Node, Branch> candidate : cfg.getDirectedGraphNodes()) {
+    for (DiGraphNode<Node, Branch> candidate : cfg.getNodes()) {
       nodePriorities.computeIfAbsent(candidate, k -> ++priorityCounter);
     }
 
@@ -205,7 +205,7 @@ public final class ControlFlowAnalysis implements Callback, CompilerPass {
 
       nodePriorities.put(current, ++priorityCounter);
 
-      List<DiGraphNode<Node, Branch>> successors = cfg.getDirectedSuccNodes(current);
+      List<? extends DiGraphNode<Node, Branch>> successors = cfg.getDirectedSuccNodes(current);
       worklist.addAll(successors);
     }
   }
@@ -450,7 +450,7 @@ public final class ControlFlowAnalysis implements Callback, CompilerPass {
     // The edge that transfer control to the beginning of the loop body.
     createEdge(forNode, Branch.ON_TRUE, computeFallThrough(body));
     // The edge to end of the loop.
-    if (!cond.isEmpty()) {
+    if (!cond.isEmpty() && !cond.isTrue()) {
       createEdge(forNode, Branch.ON_FALSE, computeFollowNode(forNode, this));
     }
     // The end of the body will have a unconditional branch to our iter

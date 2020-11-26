@@ -18,6 +18,8 @@ package com.google.javascript.jscomp;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 
 import com.google.common.annotations.GwtIncompatible;
 import com.google.common.annotations.VisibleForTesting;
@@ -155,7 +157,7 @@ public final class JSModuleGraph implements Serializable {
               module.getName(), dep.getName()),
               module, dep);
         }
-        depth = Math.max(depth, depDepth + 1);
+        depth = max(depth, depDepth + 1);
       }
 
       module.setDepth(depth);
@@ -394,7 +396,7 @@ public final class JSModuleGraph implements Serializable {
     for (int dependentIndex = dependentModules.nextSetBit(0);
         dependentIndex >= 0;
         dependentIndex = dependentModules.nextSetBit(dependentIndex + 1)) {
-      minDependentModuleIndex = Math.min(minDependentModuleIndex, dependentIndex);
+      minDependentModuleIndex = min(minDependentModuleIndex, dependentIndex);
       candidates.and(selfPlusTransitiveDeps[dependentIndex]);
     }
     checkState(
@@ -437,7 +439,7 @@ public final class JSModuleGraph implements Serializable {
     int m2Depth = m2.getDepth();
     // According our definition of depth, the result must have a strictly
     // smaller depth than either m1 or m2.
-    for (int depth = Math.min(m1Depth, m2Depth) - 1; depth >= 0; depth--) {
+    for (int depth = min(m1Depth, m2Depth) - 1; depth >= 0; depth--) {
       List<JSModule> modulesAtDepth = modulesByDepth.get(depth);
       // Look at the modules at this depth in reverse order, so that we use the
       // original ordering of the modules to break ties (later meaning deeper).
@@ -497,8 +499,7 @@ public final class JSModuleGraph implements Serializable {
 
   /** Returns the transitive dependencies of the module. */
   private Set<JSModule> getTransitiveDeps(JSModule m) {
-    Set<JSModule> deps = dependencyMap.computeIfAbsent(m, JSModule::getAllDependencies);
-    return deps;
+    return dependencyMap.computeIfAbsent(m, JSModule::getAllDependencies);
   }
 
   /**
@@ -547,15 +548,11 @@ public final class JSModuleGraph implements Serializable {
     HashMap<String, Set<CompilerInput>> inputsByProvide = new HashMap<>();
     for (CompilerInput input : originalInputs) {
       for (String provide : input.getKnownProvides()) {
-        if (!inputsByProvide.containsKey(provide)) {
-          inputsByProvide.put(provide, new LinkedHashSet<>());
-        }
+        inputsByProvide.computeIfAbsent(provide, (String k) -> new LinkedHashSet<>());
         inputsByProvide.get(provide).add(input);
       }
       String moduleName = input.getPath().toModuleName();
-      if (!inputsByProvide.containsKey(moduleName)) {
-        inputsByProvide.put(moduleName, new LinkedHashSet<>());
-      }
+      inputsByProvide.computeIfAbsent(moduleName, (String k) -> new LinkedHashSet<>());
       inputsByProvide.get(moduleName).add(input);
     }
 
@@ -593,7 +590,7 @@ public final class JSModuleGraph implements Serializable {
     List<CompilerInput> orderedInputs = new ArrayList<>();
     Set<CompilerInput> reachedInputs = new HashSet<>();
 
-    for (JSModule module : entryPointInputsPerModule.keySet()) {
+    for (JSModule module : modules) {
       List<CompilerInput> transitiveClosure;
       // Prefer a depth first ordering of dependencies from entry points.
       // Always orders in a deterministic fashion regardless of the order of provided inputs

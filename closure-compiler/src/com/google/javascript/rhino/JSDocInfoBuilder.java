@@ -43,7 +43,6 @@ import static com.google.common.base.Preconditions.checkState;
 
 import com.google.javascript.rhino.JSDocInfo.Visibility;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 import javax.annotation.Nullable;
 
@@ -63,7 +62,7 @@ public final class JSDocInfoBuilder {
   private boolean populated;
 
   // whether to include the documentation itself when parsing the JsDoc
-  private final boolean parseDocumentation;
+  private boolean parseDocumentation;
 
   // the current marker, if any.
   private JSDocInfo.Marker currentMarker;
@@ -71,8 +70,9 @@ public final class JSDocInfoBuilder {
   // the set of unique license texts
   private final Set<String> licenseTexts;
 
-  public JSDocInfoBuilder(boolean parseDocumentation) {
-    this(new JSDocInfo(parseDocumentation), parseDocumentation, false);
+  /** This constructor should not be called directly. Use JSDocInfo.builder() instead. */
+  JSDocInfoBuilder() {
+    this(new JSDocInfo(), false, false);
   }
 
   private JSDocInfoBuilder(
@@ -91,17 +91,64 @@ public final class JSDocInfoBuilder {
     return new JSDocInfoBuilder(clone, info.isDocumentationIncluded(), true);
   }
 
+  public static JSDocInfoBuilder maybeCopyFrom(@Nullable JSDocInfo info) {
+    if (info == null) {
+      return new JSDocInfoBuilder().parseDocumentation();
+    }
+    return copyFrom(info);
+  }
+
+  /**
+   * Returns a JSDocInfoBuilder that contains a copy of the given JSDocInfo in which only the
+   * {@code @type} field of the JSDocInfo is replaced with the given typeExpression. This is done to
+   * prevent generating code in the client module which references local variables from another
+   * module.
+   */
+  public static JSDocInfoBuilder maybeCopyFromWithNewType(
+      JSDocInfo info, JSTypeExpression typeExpression) {
+    if (info == null) {
+      JSDocInfo temp = new JSDocInfo();
+      temp.setIncludeDocumentation(true);
+      return copyFromWithNewType(temp, typeExpression);
+    }
+    return copyFromWithNewType(info, typeExpression);
+  }
+
   public static JSDocInfoBuilder copyFromWithNewType(
       JSDocInfo info, JSTypeExpression typeExpression) {
     JSDocInfo newTypeInfo = info.cloneWithNewType(false, typeExpression);
     return new JSDocInfoBuilder(newTypeInfo, info.isDocumentationIncluded(), true);
   }
 
-  public static JSDocInfoBuilder maybeCopyFrom(@Nullable JSDocInfo info) {
+  /**
+   * Returns a JSDocInfoBuilder that contains a JSDoc in which all module local types (which may be
+   * inside {@code @param}, {@code @type} or {@code @returns} are replaced with unknown. This is
+   * done to prevent generating code in the client module which references local variables from
+   * another module.
+   */
+  public static JSDocInfoBuilder maybeCopyFromAndReplaceNames(
+      JSDocInfo info, Set<String> moduleLocalNamesToReplace) {
     if (info == null) {
-      return new JSDocInfoBuilder(true);
+      info = new JSDocInfo();
+      info.setIncludeDocumentation(true);
     }
-    return copyFrom(info);
+    return copyFromAndReplaceNames(info, moduleLocalNamesToReplace);
+  }
+
+  private static JSDocInfoBuilder copyFromAndReplaceNames(JSDocInfo info, Set<String> oldNames) {
+    JSDocInfo newTypeInfo = info.cloneAndReplaceTypeNames(oldNames);
+    return new JSDocInfoBuilder(newTypeInfo, info.isDocumentationIncluded(), true);
+  }
+
+  /**
+   * Configures the builder to parse documentation. This should be called immediately after
+   * instantiating the builder if documentation should be included, since it enables various
+   * operations to do work that would otherwise be no-ops.
+   */
+  public JSDocInfoBuilder parseDocumentation() {
+    parseDocumentation = true;
+    currentInfo.setIncludeDocumentation(true);
+    return this;
   }
 
   /**
@@ -197,7 +244,10 @@ public final class JSDocInfoBuilder {
   public JSDocInfo buildAndReset() {
     JSDocInfo info = build(false);
     if (currentInfo == null) {
-      currentInfo = new JSDocInfo(parseDocumentation);
+      currentInfo = new JSDocInfo();
+      if (parseDocumentation) {
+        currentInfo.setIncludeDocumentation(true);
+      }
       populated = false;
     }
     return info;
@@ -821,6 +871,21 @@ public final class JSDocInfoBuilder {
   }
 
   /**
+   * Records an ID for an alternate message to be used if this message is not yet translated.
+   *
+   * @return {@code true} If the alternate message ID was successfully updated.
+   */
+  public boolean recordAlternateMessageId(String alternateMessageId) {
+    if (alternateMessageId != null && currentInfo.getAlternateMessageId() == null) {
+      currentInfo.setAlternateMessageId(alternateMessageId);
+      populated = true;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  /**
    * Records an identifier for a Closure Primitive. function.
    *
    * @return {@code true} If the id was successfully updated.
@@ -1396,25 +1461,6 @@ public final class JSDocInfoBuilder {
 
   public void mergePropertyBitfieldFrom(JSDocInfo other) {
     currentInfo.mergePropertyBitfieldFrom(other);
-  }
-
-  /**
-   * Records a parameter that gets disposed.
-   *
-   * @return {@code true} if all the parameters was recorded and
-   *     {@code false} if a parameter with the same name was already defined
-   */
-  public boolean recordDisposesParameter(List<String> parameterNames) {
-    for (String parameterName : parameterNames) {
-      if ((currentInfo.hasParameter(parameterName) ||
-          parameterName.equals("*")) &&
-          currentInfo.setDisposedParameter(parameterName)) {
-        populated = true;
-      } else {
-        return false;
-      }
-    }
-    return true;
   }
 
   /**

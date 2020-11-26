@@ -87,9 +87,9 @@ Document.prototype.createTreeWalker = function(
 Document.prototype.getElementsByTagNameNS = function(namespace, name) {};
 
 /**
- * @param {Node} externalNode
- * @param {boolean} deep
- * @return {Node}
+ * @param {!Node} externalNode
+ * @param {boolean=} deep
+ * @return {!Node}
  * @see https://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/core.html#Core-Document-importNode
  */
 Document.prototype.importNode = function(externalNode, deep) {};
@@ -703,7 +703,6 @@ function HTMLFormControlsCollection() {}
  * @see https://html.spec.whatwg.org/multipage/infrastructure.html#dom-htmlformcontrolscollection-nameditem
  * @nosideeffects
  * @override
- * @suppress {newCheckTypes}
  */
 HTMLFormControlsCollection.prototype.namedItem = function(name) {};
 
@@ -947,6 +946,20 @@ HTMLOptionElement.prototype.text;
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-6185554
  */
 HTMLOptionElement.prototype.value;
+
+
+
+/**
+ * @constructor
+ * @extends {HTMLOptionElement}
+ * @param {*=} opt_text
+ * @param {*=} opt_value
+ * @param {*=} opt_defaultSelected
+ * @param {*=} opt_selected
+ */
+function Option(opt_text, opt_value, opt_defaultSelected, opt_selected) {}
+
+
 
 /**
  * @constructor
@@ -2442,7 +2455,7 @@ HTMLTableRowElement.prototype.deleteCell = function(index) {};
 
 /**
  * @param {number} index
- * @return {HTMLElement}
+ * @return {!HTMLElement}
  * @see http://www.w3.org/TR/2000/CR-DOM-Level-2-20000510/html.html#ID-68927016
  */
 HTMLTableRowElement.prototype.insertCell = function(index) {};
@@ -2792,7 +2805,7 @@ Window.prototype.location;
 Window.prototype.name;
 
 /**
- * @type {Navigator}
+ * @type {!Navigator}
  * @see https://developer.mozilla.org/en/DOM/window.navigator
  */
 Window.prototype.navigator;

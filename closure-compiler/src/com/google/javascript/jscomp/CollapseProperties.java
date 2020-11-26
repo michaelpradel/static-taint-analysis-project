@@ -82,15 +82,15 @@ class CollapseProperties implements CompilerPass {
   static final DiagnosticType NAMESPACE_REDEFINED_WARNING =
       DiagnosticType.warning("JSC_NAMESPACE_REDEFINED", "namespace {0} should not be redefined");
 
-  static final DiagnosticType UNSAFE_THIS = DiagnosticType.warning(
-      "JSC_UNSAFE_THIS",
-      "dangerous use of ''this'' in static method {0}");
+  static final DiagnosticType RECEIVER_AFFECTED_BY_COLLAPSE =
+      DiagnosticType.warning(
+          "JSC_RECEIVER_AFFECTED_BY_COLLAPSE",
+          "Receiver reference in function {0} changes meaning when namespace is collapsed.\n"
+              + " Consider annotating @nocollapse; however, other properties on the receiver may"
+              + " still be collapsed.");
 
   private final AbstractCompiler compiler;
   private final PropertyCollapseLevel propertyCollapseLevel;
-
-  /** Global namespace tree */
-  private List<Name> globalNames;
 
   /** Maps names (e.g. "a.b.c") to nodes in the global namespace tree */
   private Map<String, Name> nameMap;
@@ -110,7 +110,7 @@ class CollapseProperties implements CompilerPass {
 
     GlobalNamespace namespace = new GlobalNamespace(compiler, root);
     nameMap = namespace.getNameIndex();
-    globalNames = namespace.getNameForest();
+    List<Name> globalNames = namespace.getNameForest();
     Set<Name> escaped = checkNamespaces();
     for (Name name : globalNames) {
       flattenReferencesToCollapsibleDescendantNames(name, name.getBaseName(), escaped);
@@ -125,7 +125,7 @@ class CollapseProperties implements CompilerPass {
 
     // This shouldn't be necessary, this pass should already be setting new constants as constant.
     // TODO(b/64256754): Investigate.
-    (new PropagateConstantAnnotationsOverVars(compiler, false)).process(externs, root);
+    new PropagateConstantAnnotationsOverVars(compiler, false).process(externs, root);
   }
 
   private boolean canCollapse(Name name) {
@@ -162,33 +162,34 @@ class CollapseProperties implements CompilerPass {
   private Set<Name> checkNamespaces() {
     ImmutableSet.Builder<Name> escaped = ImmutableSet.builder();
     for (Name name : nameMap.values()) {
-      if (name.isNamespaceObjectLit()
-          && (name.getAliasingGets() > 0
-              || name.getLocalSets() + name.getGlobalSets() > 1
-              || name.getDeleteProps() > 0)) {
-        boolean initialized = name.getDeclaration() != null;
-        for (Ref ref : name.getRefs()) {
-          if (ref == name.getDeclaration()) {
-            continue;
+      if (!name.isNamespaceObjectLit()) {
+        continue;
+      }
+      if (name.getAliasingGets() == 0
+          && name.getLocalSets() + name.getGlobalSets() <= 1
+          && name.getDeleteProps() == 0) {
+        continue;
+      }
+      boolean initialized = name.getDeclaration() != null;
+      for (Ref ref : name.getRefs()) {
+        if (ref == name.getDeclaration()) {
+          continue;
+        }
+
+        if (ref.type == Ref.Type.DELETE_PROP) {
+          if (initialized) {
+            warnAboutNamespaceRedefinition(name, ref);
+          }
+        } else if (ref.type == Ref.Type.SET_FROM_GLOBAL || ref.type == Ref.Type.SET_FROM_LOCAL) {
+          if (initialized && !isSafeNamespaceReinit(ref)) {
+            warnAboutNamespaceRedefinition(name, ref);
           }
 
-          if (ref.type == Ref.Type.DELETE_PROP) {
-            if (initialized) {
-              warnAboutNamespaceRedefinition(name, ref);
-            }
-          } else if (
-              ref.type == Ref.Type.SET_FROM_GLOBAL
-              || ref.type == Ref.Type.SET_FROM_LOCAL) {
-            if (initialized && !isSafeNamespaceReinit(ref)) {
-              warnAboutNamespaceRedefinition(name, ref);
-            }
-
-            initialized = true;
-          } else if (ref.type == Ref.Type.ALIASING_GET) {
-            warnAboutNamespaceAliasing(name, ref);
-            escaped.add(name);
-            break;
-          }
+          initialized = true;
+        } else if (ref.type == Ref.Type.ALIASING_GET) {
+          warnAboutNamespaceAliasing(name, ref);
+          escaped.add(name);
+          break;
         }
       }
     }
@@ -418,9 +419,9 @@ class CollapseProperties implements CompilerPass {
     //   name a$b$c
     Node ref = NodeUtil.newName(compiler, alias, n, originalName);
     NodeUtil.copyNameAnnotations(n.getLastChild(), ref);
-    if (parent.isCall() && n == parent.getFirstChild()) {
-      // The node was a call target, we are deliberately flatten these as
-      // we node the "this" isn't provided by the namespace. Mark it as such:
+    if (NodeUtil.isNormalOrOptChainCall(parent) && n == parent.getFirstChild()) {
+      // The node was a call target. We are deliberately flattening these as
+      // the "this" isn't provided by the namespace. Mark it as such:
       parent.putBooleanProp(Node.FREE_CALL, true);
     }
 
@@ -478,7 +479,7 @@ class CollapseProperties implements CompilerPass {
     Node grandparent = parent.getParent();
 
     if (rvalue != null && rvalue.isFunction()) {
-      checkForHosedThisReferences(rvalue, refName.getJSDocInfo(), refName);
+      checkForReceiverAffectedByCollapse(rvalue, refName.getJSDocInfo(), refName);
     }
 
     // Create the new alias node.
@@ -598,7 +599,7 @@ class CollapseProperties implements CompilerPass {
     } else if (!n.isSimpleName()) {
       // Create a VAR node to declare the name.
       if (rvalue.isFunction()) {
-        checkForHosedThisReferences(rvalue, n.getJSDocInfo(), n);
+        checkForReceiverAffectedByCollapse(rvalue, n.getJSDocInfo(), n);
       }
 
       compiler.reportChangeToEnclosingScope(rvalue);
@@ -643,27 +644,32 @@ class CollapseProperties implements CompilerPass {
   }
 
   /**
-   * Warns about any references to "this" in the given FUNCTION. The function
-   * is getting collapsed, so the references will change.
+   * Warns about any references to "this" in the given FUNCTION. The function is getting collapsed,
+   * so the references will change.
    */
-  private void checkForHosedThisReferences(Node function, JSDocInfo docInfo,
-      final Name name) {
-    // A function is getting collapsed. Make sure that if it refers to "this",
-    // it must be a constructor, interface, record, arrow function, or documented with @this.
-    boolean isAllowedToReferenceThis =
-        (docInfo != null && (docInfo.isConstructorOrInterface() || docInfo.hasThisType()))
-        || function.isArrowFunction();
-    if (!isAllowedToReferenceThis) {
-      NodeTraversal.traverse(compiler, function.getLastChild(),
-          new NodeTraversal.AbstractShallowCallback() {
-            @Override
-            public void visit(NodeTraversal t, Node n, Node parent) {
-              if (n.isThis()) {
-                compiler.report(
-                    JSError.make(n, UNSAFE_THIS, name.getFullName()));
-              }
-            }
-          });
+  private void checkForReceiverAffectedByCollapse(Node function, JSDocInfo docInfo, Name name) {
+    checkState(function.isFunction());
+
+    if (docInfo != null) {
+      // Don't rely on type inference for this check.
+
+      if (docInfo.isConstructorOrInterface()) {
+        return; // Ctors and interfaces need to be able to reference `this`
+      }
+      if (docInfo.hasThisType()) {
+        /**
+         * Use `@this` as a signal that the reference is intentional.
+         *
+         * <p>TODO(b/156823102): This signal also silences the check on all transpiled static
+         * methods.
+         */
+        return;
+      }
+    }
+
+    // Use the NodeUtil method so we don't forget to update this logic.
+    if (NodeUtil.referencesOwnReceiver(function)) {
+      compiler.report(JSError.make(function, RECEIVER_AFFECTED_BY_COLLAPSE, name.getFullName()));
     }
   }
 
@@ -767,7 +773,7 @@ class CollapseProperties implements CompilerPass {
     // detach `static m() {}` from `class Foo { static m() {} }`
     Node memberFn = declaration.getNode().detach();
     Node fnNode = memberFn.getOnlyChild().detach();
-    checkForHosedThisReferences(fnNode, memberFn.getJSDocInfo(), n);
+    checkForReceiverAffectedByCollapse(fnNode, memberFn.getJSDocInfo(), n);
 
     // add a var declaration, creating `var Foo$m = function() {}; class Foo {}`
     Node varDecl = IR.var(NodeUtil.newName(compiler, alias, memberFn), fnNode).srcref(memberFn);
@@ -877,7 +883,7 @@ class CollapseProperties implements CompilerPass {
         p.updateRefNode(p.getDeclaration(), nameNode);
 
         if (value.isFunction()) {
-          checkForHosedThisReferences(value, key.getJSDocInfo(), p);
+          checkForReceiverAffectedByCollapse(value, key.getJSDocInfo(), p);
         }
       }
     }

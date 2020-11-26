@@ -30,95 +30,21 @@ opera.version = function() {};
 function XSLTProcessor() {}
 
 /**
- * @constructor
- * @extends {HTMLOptionElement}
- * @param {*=} opt_text
- * @param {*=} opt_value
- * @param {*=} opt_defaultSelected
- * @param {*=} opt_selected
+ * @param {Node} styleSheet
+ * @return {undefined}
+ * @deprecated
  */
-function Option(opt_text, opt_value, opt_defaultSelected, opt_selected) {}
+XSLTProcessor.importStylesheet = function(styleSheet) {};
 
+/**
+ * @param {Node} source
+ * @return {Document}
+ * @deprecated
+ */
+XSLTProcessor.transformToDocument = function(source) {};
 
 // The "methods" object is a place to hang arbitrary external
 // properties. It is a throwback to pre-typed days, and should
 // not be used for any new definitions; it exists only to bridge
 // the gap between the old way and the new way.
 var methods = {};
-
-/**
- * FF 1.5+ only
- * @param {IArrayLike<T>} arr
- * @param {?function(this:S, T, number, ?) : ?} callback
- * @param {S=} opt_context
- * @return {boolean}
- * @template T,S
- * @deprecated
- */
-Array.every = function(arr, callback, opt_context) {};
-
-/**
- * @param {IArrayLike<T>} arr
- * @param {?function(this:S, T, number, ?) : ?} callback
- * @param {S=} opt_context
- * @return {!Array<T>}
- * @template T,S
- * @deprecated
- */
-Array.filter = function(arr, callback, opt_context) {};
-
-/**
- * @param {IArrayLike<T>} arr
- * @param {?function(this:S, T, number, ?) : ?} callback
- * @param {S=} opt_context
- * @template T,S
- * @return {undefined}
- * @deprecated
- */
-Array.forEach = function(arr, callback, opt_context) {};
-
-/**
- * Mozilla 1.6+ only.
- * @param {IArrayLike<T>} arr
- * @param {T} obj
- * @param {number=} opt_fromIndex
- * @return {number}
- * @template T
- * @nosideeffects
- * @deprecated
- * @see http://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/indexOf
- */
-Array.indexOf = function(arr, obj, opt_fromIndex) {};
-
-/**
- * Mozilla 1.6+ only.
- * @param {IArrayLike<T>} arr
- * @param {T} obj
- * @param {number=} opt_fromIndex
- * @return {number}
- * @template T
- * @nosideeffects
- * @deprecated
- * @see http://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/lastIndexOf
- */
-Array.lastIndexOf = function(arr, obj, opt_fromIndex) {};
-
-/**
- * @param {IArrayLike<T>} arr
- * @param {?function(this:S, T, number, !Array<T>): R} callback
- * @param {S=} opt_context
- * @return {!Array<R>}
- * @deprecated
- * @template T,S,R
- */
-Array.map = function(arr, callback, opt_context) {};
-
-/**
- * @param {IArrayLike<T>} arr
- * @param {?function(this:S, T, number, ?) : ?} callback
- * @param {S=} opt_context
- * @return {boolean}
- * @deprecated
- * @template T,S
- */
-Array.some = function(arr, callback, opt_context) {};

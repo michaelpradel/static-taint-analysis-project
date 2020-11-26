@@ -43,10 +43,6 @@ class FunctionArgumentInjector {
 
   static final String REST_MARKER = "rest param";
 
-  static final String DEFAULT_MARKER = "Default Value";
-
-  static final String OBJECT_PATTERN_MARKER = "object pattern";
-
   private final AstAnalyzer astAnalyzer;
 
   FunctionArgumentInjector(AstAnalyzer astAnalyzer) {
@@ -216,7 +212,6 @@ class FunctionArgumentInjector {
    *   undefined=2
    *
    * @param n The node in question.
-   * @param parent The parent of the node.
    * @param names The set of names to check.
    * @param unsafe The set of names that require aliases.
    * @param inInnerFunction Whether the inspection is occurring on a inner function.
@@ -253,7 +248,6 @@ class FunctionArgumentInjector {
    *   function (x) {var x;}
    *
    * @param n The NAME node in question.
-   * @param parent The parent of the node.
    */
   private static boolean canNameValueChange(Node n) {
     return NodeUtil.isLValue(n)
@@ -380,6 +374,10 @@ class FunctionArgumentInjector {
         case AND:
         case OR:
         case HOOK:
+        case COALESCE:
+        case OPTCHAIN_CALL:
+        case OPTCHAIN_GETELEM:
+        case OPTCHAIN_GETPROP:
           return true;
         default:
           break;

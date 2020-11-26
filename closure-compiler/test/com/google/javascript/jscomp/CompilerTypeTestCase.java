@@ -41,6 +41,7 @@ import com.google.javascript.rhino.jstype.ObjectType;
 import com.google.javascript.rhino.jstype.RecordTypeBuilder;
 import com.google.javascript.rhino.jstype.TemplatizedType;
 import com.google.javascript.rhino.testing.TestErrorReporter;
+import org.junit.After;
 import org.junit.Before;
 
 /** This class is mostly used by passes testing {@link TypeCheck}. */
@@ -76,7 +77,9 @@ abstract class CompilerTypeTestCase {
           "goog.array.filter = function(arr, f, obj){ return []; };",
           "goog.asserts = {};",
           "/** @return {*} */ goog.asserts.assert = function(x) { return x; };",
+          "goog.provide = function(ns) {};",
           "goog.module = function(ns) {};",
+          "/** @return {?} */",
           "goog.module.get = function(ns) {};",
           "/** @return {?} */",
           "goog.require = function(ns) {};",
@@ -95,7 +98,9 @@ abstract class CompilerTypeTestCase {
 
   protected CompilerOptions getDefaultOptions() {
     CompilerOptions options = new CompilerOptions();
-    options.setLanguageIn(LanguageMode.ECMASCRIPT_2019);
+    options.setLanguageIn(LanguageMode.UNSUPPORTED);
+    options.setCodingConvention(getCodingConvention());
+
     options.setWarningLevel(
         DiagnosticGroups.MISSING_PROPERTIES, CheckLevel.WARNING);
     options.setWarningLevel(
@@ -104,7 +109,7 @@ abstract class CompilerTypeTestCase {
         DiagnosticGroups.INVALID_CASTS, CheckLevel.WARNING);
     options.setWarningLevel(DiagnosticGroups.LINT_CHECKS, CheckLevel.WARNING);
     options.setWarningLevel(DiagnosticGroups.JSDOC_MISSING_TYPE, CheckLevel.WARNING);
-    options.setCodingConvention(getCodingConvention());
+    options.setWarningLevel(DiagnosticGroups.BOUNDED_GENERICS, CheckLevel.WARNING);
     return options;
   }
 
@@ -126,8 +131,13 @@ abstract class CompilerTypeTestCase {
 
   @Before
   public void setUp() throws Exception {
-    errorReporter = new TestErrorReporter(null, null);
+    errorReporter = new TestErrorReporter();
     initializeNewCompiler(getDefaultOptions());
+  }
+
+  @After
+  public void validateWarningsAndErrors() {
+    errorReporter.verifyHasEncounteredAllWarningsAndErrors();
   }
 
   protected static String lines(String line) {
@@ -141,7 +151,6 @@ abstract class CompilerTypeTestCase {
   protected void initializeNewCompiler(CompilerOptions options) {
     compiler = new Compiler();
     compiler.initOptions(options);
-    compiler.getOptions().setWarnUnsupportedBoundedGenerics(false);
     compiler.setFeatureSet(compiler.getFeatureSet().without(Feature.MODULES));
     registry = compiler.getTypeRegistry();
   }
@@ -182,16 +191,16 @@ abstract class CompilerTypeTestCase {
   }
 
   protected final void assertTypeEquals(JSType a, JSType b) {
-    assertType(b).isStructurallyEqualTo(a);
+    assertType(b).isEqualTo(a);
   }
 
   protected final void assertTypeEquals(String msg, JSType a, JSType b) {
-    assertWithMessage(msg).about(types()).that(b).isStructurallyEqualTo(a);
+    assertWithMessage(msg).about(types()).that(b).isEqualTo(a);
   }
 
   /** Resolves a type expression, expecting the given warnings. */
   protected JSType resolve(JSTypeExpression n, String... warnings) {
-    errorReporter.setWarnings(warnings);
+    errorReporter.expectAllWarnings(warnings);
     return n.evaluate(null, registry);
   }
 
@@ -263,12 +272,8 @@ abstract class CompilerTypeTestCase {
     return getNativeFunctionType(JSTypeNative.REGEXP_FUNCTION_TYPE);
   }
 
-  protected FunctionType getNativeU2UConstructorType() {
-    return getNativeFunctionType(JSTypeNative.U2U_CONSTRUCTOR_TYPE);
-  }
-
-  protected FunctionType getNativeU2UFunctionType() {
-    return getNativeFunctionType(JSTypeNative.U2U_FUNCTION_TYPE);
+  protected FunctionType getNativeFunctionType() {
+    return getNativeFunctionType(JSTypeNative.FUNCTION_TYPE);
   }
 
   FunctionType getNativeFunctionType(JSTypeNative jsTypeNative) {

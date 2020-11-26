@@ -20,11 +20,15 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 
+import com.google.common.base.Ascii;
 import com.google.common.collect.ImmutableList;
+import com.google.javascript.jscomp.colors.NativeColorId;
 import com.google.javascript.rhino.IR;
 import com.google.javascript.rhino.Node;
-import com.google.javascript.rhino.jstype.JSType;
+import com.google.javascript.rhino.Token;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -71,9 +75,11 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
       checkState(subtree.isCall(), subtree);
       Node callTarget = checkNotNull(subtree.getFirstChild());
 
-      if (NodeUtil.isGet(callTarget)) {
+      if (NodeUtil.isNormalGet(callTarget)) {
         if (isASTNormalized() && callTarget.getFirstChild().isQualifiedName()) {
           switch (callTarget.getFirstChild().getQualifiedName()) {
+            case "Array":
+              return tryFoldKnownArrayMethods(subtree, callTarget);
             case "Math":
               return tryFoldKnownMathMethods(subtree, callTarget);
             default: // fall out
@@ -88,8 +94,35 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
     return subtree;
   }
 
+  /** Tries to evaluate a method on the Array object */
+  private Node tryFoldKnownArrayMethods(Node subtree, Node callTarget) {
+    checkArgument(subtree.isCall());
+
+    Node targetMethod = callTarget.getFirstChild().getNext();
+    // Method node might not be a string if callTarget is a GETELEM.
+    // e.g. Array[something]()
+    if (!targetMethod.isString() || !targetMethod.getString().equals("of")) {
+      return subtree;
+    }
+
+    subtree.removeFirstChild();
+
+    Node arraylit = new Node(Token.ARRAYLIT);
+    arraylit.addChildrenToBack(subtree.removeChildren());
+    subtree.replaceWith(arraylit);
+    reportChangeToEnclosingScope(arraylit);
+    return arraylit;
+  }
+
   /** Tries to evaluate a method on the Math object */
   private strictfp Node tryFoldKnownMathMethods(Node subtree, Node callTarget) {
+    checkArgument(NodeUtil.isNormalGet(callTarget), callTarget);
+    Node methodNode = callTarget.getLastChild();
+    // Method node might not be a string if callTarget is a GETELEM.
+    // e.g. Math[something]()
+    if (!methodNode.isString()) {
+      return subtree;
+    }
     // first collect the arguments, if they are all numbers then we proceed
     List<Double> args = ImmutableList.of();
     for (Node arg = callTarget.getNext(); arg != null; arg = arg.getNext()) {
@@ -105,7 +138,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
       }
     }
     Double replacement = null;
-    String methodName = callTarget.getFirstChild().getNext().getString();
+    String methodName = methodNode.getString();
     // NOTE: the standard does not define precision for these methods, but we are conservative, so
     // for now we only implement the methods that are guaranteed to not increase the size of the
     // numeric constants.
@@ -127,6 +160,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
             // if the double is exactly representable as a float, then just cast since no rounding
             // is involved
           } else if ((float) arg == arg) {
+            // TODO(b/155511629): This condition is always true after J2CL transpilation.
             replacement = Double.valueOf((float) arg);
           } else {
             // (float) arg does not necessarily use the correct rounding mode, so don't do anything
@@ -165,7 +199,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
           {
             double result = Double.NEGATIVE_INFINITY;
             for (Double d : args) {
-              result = Math.max(result, d);
+              result = max(result, d);
             }
             replacement = result;
             break;
@@ -174,7 +208,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
           {
             double result = Double.POSITIVE_INFINITY;
             for (Double d : args) {
-              result = Math.min(result, d);
+              result = min(result, d);
             }
             replacement = result;
             break;
@@ -247,8 +281,8 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
     if (useTypes
         && firstArg != null
         && (isStringLiteral
-            || (stringNode.getJSType() != null
-                && stringNode.getJSType().isStringValueType()))) {
+            || (stringNode.getColor() != null && stringNode.getColor().is(NativeColorId.STRING))
+            || (stringNode.getJSType() != null && stringNode.getJSType().isStringValueType()))) {
       if (subtree.hasXChildren(3)) {
         Double maybeStart = getSideEffectFreeNumberValue(firstArg);
         if (maybeStart != null) {
@@ -300,10 +334,17 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
   }
 
   /**
-   * @return The lowered string Node.
+   * Returns The lowered string Node.
+   *
+   * <p>This method is believed to be correct independent of the locale of the compiler and the JSVM
+   * executing the compiled code, assuming both are implementations of Unicode are correct.
+   *
+   * @see <a href="https://tc39.es/ecma262/#sec-string.prototype.tolowercase"></a>
+   * @see <a href="https://unicode.org/faq/casemap_charprop.html#5"></a>
+   * @see <a
+   *     href="https://docs.oracle.com/javase/8/docs/api/java/lang/String.html#toLowerCase-java.util.Locale-"></a>
    */
   private Node tryFoldStringToLowerCase(Node subtree, Node stringNode) {
-    // From Rhino, NativeString.java. See ECMA 15.5.4.11
     String lowered = stringNode.getString().toLowerCase(Locale.ROOT);
     Node replacement = IR.string(lowered);
     subtree.replaceWith(replacement);
@@ -312,10 +353,17 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
   }
 
   /**
-   * @return The upped string Node.
+   * Returns The upped string Node.
+   *
+   * <p>This method is believed to be correct independent of the locale of the compiler and the JSVM
+   * executing the compiled code, assuming both are implementations of Unicode are correct.
+   *
+   * @see <a href="https://tc39.es/ecma262/#sec-string.prototype.touppercase"></a>
+   * @see <a href="https://unicode.org/faq/casemap_charprop.html#5"></a>
+   * @see <a
+   *     href="https://docs.oracle.com/javase/8/docs/api/java/lang/String.html#toUpperCase-java.util.Locale-"></a>
    */
   private Node tryFoldStringToUpperCase(Node subtree, Node stringNode) {
-    // From Rhino, NativeString.java. See ECMA 15.5.4.12
     String upped = stringNode.getString().toUpperCase(Locale.ROOT);
     Node replacement = IR.string(upped);
     subtree.replaceWith(replacement);
@@ -453,8 +501,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
       newNode = IR.number(0);
     } else if (isParseInt) {
       if (radix == 0 || radix == 16) {
-        if (stringVal.length() > 1 &&
-            stringVal.substring(0, 2).equalsIgnoreCase("0x")) {
+        if (stringVal.length() > 1 && Ascii.equalsIgnoreCase(stringVal.substring(0, 2), "0x")) {
           radix = 16;
           stringVal = stringVal.substring(2);
         } else if (radix == 0) {
@@ -616,7 +663,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
     switch (arrayFoldedChildren.size()) {
       case 0:
         Node emptyStringNode = IR.string("");
-        n.getParent().replaceChild(n, emptyStringNode);
+        n.replaceWith(emptyStringNode);
         reportChangeToEnclosingScope(emptyStringNode);
         return emptyStringNode;
       case 1:
@@ -936,7 +983,7 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
       Node arg2 = arg1.getNext();
       if (arg2 != null) {
         if (arg2.isNumber()) {
-          limit = Math.min((int) arg2.getDouble(), limit);
+          limit = min((int) arg2.getDouble(), limit);
           if (limit < 0) {
             return n;
           }
@@ -1073,22 +1120,31 @@ class PeepholeReplaceKnownMethods extends AbstractPeepholeOptimization {
     if (functionName == null || !functionName.getString().equals("concat")) {
       return null;
     }
-    Node calleNode = callTarget.getFirstChild();
-    if (!containsExactlyArray(calleNode)) {
+    Node calleeNode = callTarget.getFirstChild();
+    if (!containsExactlyArray(calleeNode)) {
       return null;
     }
     Node firstArgumentNode = n.getSecondChild();
-    return new ConcatFunctionCall(n, calleNode, firstArgumentNode) {};
+    return new ConcatFunctionCall(n, calleeNode, firstArgumentNode) {};
   }
 
-  /** Check if a node contains an array type or function call that returns only an array. */
+  /** Check if a node is a known array. Checks for array literals and nested .concat calls */
   private static boolean containsExactlyArray(Node n) {
-    if (n == null || n.getJSType() == null) {
+    if (n == null) {
       return false;
     }
-    JSType nodeType = n.getJSType();
-    return (nodeType.isArrayType()
-        || (nodeType.isTemplatizedType()
-            && nodeType.toMaybeTemplatizedType().getReferencedType().isArrayType()));
+
+    if (n.isArrayLit()) {
+      return true;
+    }
+
+    // Check for "[].concat(1)"
+    if (!n.isCall()) {
+      return false;
+    }
+    Node callee = n.getFirstChild();
+    return callee.isGetProp()
+        && callee.getSecondChild().getString().equals("concat")
+        && containsExactlyArray(callee.getFirstChild());
   }
 }

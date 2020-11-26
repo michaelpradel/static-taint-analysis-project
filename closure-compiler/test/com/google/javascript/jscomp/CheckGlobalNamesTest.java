@@ -20,28 +20,26 @@ import static com.google.javascript.jscomp.CheckGlobalNames.NAME_DEFINED_LATE_WA
 import static com.google.javascript.jscomp.CheckGlobalNames.STRICT_MODULE_DEP_QNAME;
 import static com.google.javascript.jscomp.CheckGlobalNames.UNDEFINED_NAME_WARNING;
 
+import com.google.javascript.jscomp.testing.JSChunkGraphBuilder;
 import com.google.javascript.rhino.Node;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
-/**
- * Tests for {@code CheckGlobalNames.java}.
- *
- * @author nicksantos@google.com (Nick Santos)
- */
+/** Tests for {@code CheckGlobalNames.java}. */
 @RunWith(JUnit4.class)
 public final class CheckGlobalNamesTest extends CompilerTestCase {
 
   private boolean injectNamespace = false;
 
   public CheckGlobalNamesTest() {
-    super("function alert() {}" +
-          "/** @constructor */ function Object(){}" +
-          "Object.prototype.hasOwnProperty = function() {};" +
-          "/** @constructor */ function Function(){}" +
-          "Function.prototype.call = function() {};");
+    super(
+        "function alert() {}"
+            + "/** @constructor */ function Object(){}"
+            + "Object.prototype.hasOwnProperty = function() {};"
+            + "/** @constructor */ function Function(){}"
+            + "Function.prototype.call = function() {};");
   }
 
   @Override
@@ -53,14 +51,13 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
   @Override
   protected CompilerPass getProcessor(final Compiler compiler) {
-    final CheckGlobalNames checkGlobalNames = new CheckGlobalNames(
-        compiler, CheckLevel.WARNING);
+    final CheckGlobalNames checkGlobalNames = new CheckGlobalNames(compiler, CheckLevel.WARNING);
     if (injectNamespace) {
       return new CompilerPass() {
         @Override
         public void process(Node externs, Node js) {
-          checkGlobalNames.injectNamespace(
-              new GlobalNamespace(compiler, externs, js))
+          checkGlobalNames
+              .injectNamespace(new GlobalNamespace(compiler, externs, js))
               .process(externs, js);
         }
       };
@@ -78,8 +75,7 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
   private static final String GET_NAMES =
       "var a = {get d() {return 1}}; a.b = 3; a.c = {get e() {return 5}};";
-  private static final String SET_NAMES =
-      "var a = {set d(x) {}}; a.b = 3; a.c = {set e(y) {}};";
+  private static final String SET_NAMES = "var a = {set d(x) {}}; a.b = 3; a.c = {set e(y) {}};";
   private static final String NAMES = "var a = {d: 1}; a.b = 3; a.c = {e: 5};";
   private static final String LET_NAMES = "let a = {d: 1}; a.b = 3; a.c = {e: 5};";
   private static final String CONST_NAMES = "const a = {d: 1, b: 3, c: {e: 5}};";
@@ -151,15 +147,20 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
   @Test
   public void testRefToUndefinedProperty1() {
     testWarning(NAMES + "alert(a.x);", UNDEFINED_NAME_WARNING);
+    // GlobalNamespace does not report `a.c?.x` as a reference to a global qualified name `a.c.x`,
+    // so UNDEFINED_NAME_WARNING will not be emitted. This is working as intended.
+    testSame(NAMES + "alert(a?.x);");
 
     testWarning(CLASS_DECLARATION_NAMES + "alert(A.x);", UNDEFINED_NAME_WARNING);
+    testSame(CLASS_DECLARATION_NAMES + "alert(A?.x);");
     testWarning(CLASS_EXPRESSION_NAMES + "alert(A.x);", UNDEFINED_NAME_WARNING);
-    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "alert(A.x);",
-        UNDEFINED_NAME_WARNING);
-    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "alert(A.x);",
-        UNDEFINED_NAME_WARNING);
+    testSame(CLASS_EXPRESSION_NAMES + "alert(A?.x);");
+    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "alert(A.x);", UNDEFINED_NAME_WARNING);
+    testSame("let " + CLASS_EXPRESSION_NAMES_STUB + "alert(A?.x);");
+    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "alert(A.x);", UNDEFINED_NAME_WARNING);
+    testSame("const " + CLASS_EXPRESSION_NAMES_STUB + "alert(A?.x);");
     testWarning(EXT_OBJLIT_NAMES + "alert(a.x);", UNDEFINED_NAME_WARNING);
-
+    testSame(EXT_OBJLIT_NAMES + "alert(a?.x);");
   }
 
   @Test
@@ -171,20 +172,28 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
     testWarning(CLASS_DECLARATION_NAMES + "alert(A.x());", UNDEFINED_NAME_WARNING);
     testWarning(CLASS_EXPRESSION_NAMES + "alert(A.x());", UNDEFINED_NAME_WARNING);
-    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "alert(A.x());",
-        UNDEFINED_NAME_WARNING);
-    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "alert(A.x());",
-        UNDEFINED_NAME_WARNING);
+    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "alert(A.x());", UNDEFINED_NAME_WARNING);
+    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "alert(A.x());", UNDEFINED_NAME_WARNING);
   }
 
   @Test
   public void testRefToUndefinedProperty3() {
     testWarning(NAMES + "alert(a.c.x);", UNDEFINED_NAME_WARNING);
+    // GlobalNamespace does not report `a.c?.x` as a reference to a global qualified name `a.c.x`,
+    // so UNDEFINED_NAME_WARNING will not be emitted. This is working as intended.
+    testSame(NAMES + "alert(a.c?.x);");
+
     testWarning(GET_NAMES + "alert(a.c.x);", UNDEFINED_NAME_WARNING);
+    testSame(GET_NAMES + "alert(a.c?.x);");
+
     testWarning(SET_NAMES + "alert(a.c.x);", UNDEFINED_NAME_WARNING);
+    testSame(SET_NAMES + "alert(a.c?.x);");
 
     testWarning(LET_NAMES + "alert(a.c.x);", UNDEFINED_NAME_WARNING);
+    testSame(LET_NAMES + "alert(a.c?.x);");
+
     testWarning(CONST_NAMES + "alert(a.c.x);", UNDEFINED_NAME_WARNING);
+    testSame(CONST_NAMES + "alert(a.c?.x);");
   }
 
   @Test
@@ -209,22 +218,20 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
     testWarning(CLASS_DECLARATION_NAMES + "var z = A.x.y;", UNDEFINED_NAME_WARNING);
     testWarning(CLASS_EXPRESSION_NAMES + "var z = A.x.y;", UNDEFINED_NAME_WARNING);
-    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "var z = A.x.y;",
-        UNDEFINED_NAME_WARNING);
-    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "var z = A.x.y;",
-        UNDEFINED_NAME_WARNING);
+    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "var z = A.x.y;", UNDEFINED_NAME_WARNING);
+    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "var z = A.x.y;", UNDEFINED_NAME_WARNING);
   }
 
   @Test
   public void testRefToDescendantOfUndefinedProperty2() {
     testWarning(NAMES + "a.x.b();", UNDEFINED_NAME_WARNING);
+    testWarning(NAMES + "a.x?.b();", UNDEFINED_NAME_WARNING);
+    testWarning(NAMES + "a.x.b?.();", UNDEFINED_NAME_WARNING);
 
     testWarning(CLASS_DECLARATION_NAMES + "A.x.y();", UNDEFINED_NAME_WARNING);
     testWarning(CLASS_EXPRESSION_NAMES + "A.x.y();", UNDEFINED_NAME_WARNING);
-    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "A.x.y();",
-        UNDEFINED_NAME_WARNING);
-    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "A.x.y();",
-        UNDEFINED_NAME_WARNING);
+    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "A.x.y();", UNDEFINED_NAME_WARNING);
+    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "A.x.y();", UNDEFINED_NAME_WARNING);
   }
 
   @Test
@@ -233,10 +240,8 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
     testWarning(CLASS_DECLARATION_NAMES + "A.x.y = 42;", UNDEFINED_NAME_WARNING);
     testWarning(CLASS_EXPRESSION_NAMES + "A.x.y = 42;", UNDEFINED_NAME_WARNING);
-    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "A.x.y = 42;",
-        UNDEFINED_NAME_WARNING);
-    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "A.x.y = 42;",
-        UNDEFINED_NAME_WARNING);
+    testWarning("let " + CLASS_EXPRESSION_NAMES_STUB + "A.x.y = 42;", UNDEFINED_NAME_WARNING);
+    testWarning("const " + CLASS_EXPRESSION_NAMES_STUB + "A.x.y = 42;", UNDEFINED_NAME_WARNING);
   }
 
   @Test
@@ -273,17 +278,20 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
   @Test
   public void testRefToDescendantOfUndefinedPropertyGivesCorrectWarning() {
-    testWarning(NAMES + "a.x.b = 3;", UNDEFINED_NAME_WARNING,
-        UNDEFINED_NAME_WARNING.format("a.x"));
+    testWarning(NAMES + "a.x.b = 3;", UNDEFINED_NAME_WARNING, UNDEFINED_NAME_WARNING.format("a.x"));
 
-    testWarning(LET_NAMES + "a.x.b = 3;", UNDEFINED_NAME_WARNING,
-        UNDEFINED_NAME_WARNING.format("a.x"));
-    testWarning(CONST_NAMES + "a.x.b = 3;", UNDEFINED_NAME_WARNING,
-        UNDEFINED_NAME_WARNING.format("a.x"));
+    testWarning(
+        LET_NAMES + "a.x.b = 3;", UNDEFINED_NAME_WARNING, UNDEFINED_NAME_WARNING.format("a.x"));
+    testWarning(
+        CONST_NAMES + "a.x.b = 3;", UNDEFINED_NAME_WARNING, UNDEFINED_NAME_WARNING.format("a.x"));
 
-    testWarning(CLASS_DECLARATION_NAMES + "A.x.y = 42;", UNDEFINED_NAME_WARNING,
+    testWarning(
+        CLASS_DECLARATION_NAMES + "A.x.y = 42;",
+        UNDEFINED_NAME_WARNING,
         UNDEFINED_NAME_WARNING.format("A.x"));
-    testWarning(CLASS_EXPRESSION_NAMES + "A.x.y = 42;", UNDEFINED_NAME_WARNING,
+    testWarning(
+        CLASS_EXPRESSION_NAMES + "A.x.y = 42;",
+        UNDEFINED_NAME_WARNING,
         UNDEFINED_NAME_WARNING.format("A.x"));
   }
 
@@ -295,115 +303,120 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
   @Test
   public void testSuppressionOfUndefinedNamesWarning() {
-    testSame(new String[] {
-        NAMES +
-        "/** @constructor */ function Foo() { };" +
-        "/** @suppress {undefinedNames} */" +
-        "Foo.prototype.bar = function() {" +
-        "  alert(a.x);" +
-        "  alert(a.x.b());" +
-        "  a.x();" +
-        "  var c = a.x.b;" +
-        "  var c = a.x.b();" +
-        "  a.x.b();" +
-        "  a.x.b = 3;" +
-        "};",
-    });
+    testSame(
+        new String[] {
+          NAMES
+              + "/** @constructor */ function Foo() { };"
+              + "/** @suppress {undefinedNames} */"
+              + "Foo.prototype.bar = function() {"
+              + "  alert(a.x);"
+              + "  alert(a.x.b());"
+              + "  a.x();"
+              + "  var c = a.x.b;"
+              + "  var c = a.x.b();"
+              + "  a.x.b();"
+              + "  a.x.b = 3;"
+              + "};",
+        });
   }
 
   @Test
   public void testNoWarningForSimpleVarModuleDep1() {
-    testSame(createModuleChain(
-        NAMES,
-        "var c = a;"
-    ));
+    testSame(JSChunkGraphBuilder.forChain().addChunk(NAMES).addChunk("var c = a;").build());
   }
 
   @Test
   public void testNoWarningForSimpleVarModuleDep2() {
-    testSame(createModuleChain(
-        "var c = a;",
-        NAMES
-    ));
+    testSame(JSChunkGraphBuilder.forChain().addChunk("var c = a;").addChunk(NAMES).build());
   }
 
   @Test
   public void testNoWarningForGoodModuleDep1() {
-    testSame(createModuleChain(
-        NAMES,
-        "var c = a.b;"
-    ));
+    testSame(JSChunkGraphBuilder.forChain().addChunk(NAMES).addChunk("var c = a.b;").build());
   }
 
   @Test
   public void testNoWarningForModuleDep_onUnknownOriginNamespace() {
     testSame(
-        createModuleStar(
+        JSChunkGraphBuilder.forStar()
             // root module, e.g. a legacy namespace goog.module.
-            "const ns = {}; class C { static m() {} }; ns.C = C;",
+            .addChunk("const ns = {}; class C { static m() {} }; ns.C = C;")
             // leaf 1, uses ns.C.
-            "alert(ns.C.m);",
+            .addChunk("alert(ns.C.m);")
             // leaf 2, a mod.
-            "ns.C.m = function() { return 0; };"));
+            .addChunk("ns.C.m = function() { return 0; };")
+            .build());
   }
 
   @Test
   public void testBadModuleDep1() {
-    testSame(createModuleChain(
-        "var c = a.b;",
-        NAMES
-    ), STRICT_MODULE_DEP_QNAME);
+    testSame(
+        JSChunkGraphBuilder.forChain().addChunk("var c = a.b;").addChunk(NAMES).build(),
+        STRICT_MODULE_DEP_QNAME);
   }
 
   @Test
   public void testBadModuleDep2() {
-    testSame(createModuleStar(
-        NAMES,
-        "a.xxx = 3;",
-        "var x = a.xxx;"
-    ), STRICT_MODULE_DEP_QNAME);
+    testSame(
+        JSChunkGraphBuilder.forStar()
+            .addChunk(NAMES)
+            .addChunk("a.xxx = 3;")
+            .addChunk("var x = a.xxx;")
+            .build(),
+        STRICT_MODULE_DEP_QNAME);
   }
 
   @Test
   public void testGlobalNameSetTwiceInSiblingModulesAllowed() {
     testSame(
-        createModuleStar(
+        JSChunkGraphBuilder.forStar()
             // root module
-            "class C {};",
+            .addChunk("class C {};")
             // leaf 1
-            "C.m = 1; alert(C.m);",
+            .addChunk("C.m = 1; alert(C.m);")
             // leaf 2
-            "C.m = 1; alert(C.m);"));
+            .addChunk("C.m = 1; alert(C.m);")
+            .build());
   }
 
   @Test
   public void testGlobalNameSetOnlyInOtherSiblingModuleNotAllowed() {
     testSame(
-        createModuleStar(
+        JSChunkGraphBuilder.forStar()
             // root module
-            "class C {};",
-            // leaf 1 sets than uses C.m
-            "C.m = 1; alert(C.m);",
+            .addChunk("class C {};")
+            // leaf 1 sets then uses C.m
+            .addChunk("C.m = 1; alert(C.m);")
             // leaf 2 also sets then uses C.m
-            "C.m = 1; alert(C.m);",
+            .addChunk("C.m = 1; alert(C.m);")
             // leaf 3 uses C.m without it having been set
-            "alert(C.m);"),
+            .addChunk("alert(C.m);")
+            .build(),
         STRICT_MODULE_DEP_QNAME);
+    testSame(
+        JSChunkGraphBuilder.forStar()
+            // root module
+            .addChunk("class C {};")
+            // leaf 1 sets then uses C.m
+            .addChunk("C.m = 1; alert?.(C?.m);")
+            // leaf 2 also sets then uses C.m
+            .addChunk("C.m = 1; alert?.(C?.m);")
+            // leaf 3 uses C.m without it having been set
+            // However, the use is conditional, so no error is reported.
+            .addChunk("alert(C?.m);")
+            .build());
   }
 
   @Test
   public void testSelfModuleDep() {
-    testSame(createModuleChain(
-        NAMES + "var c = a.b;"
-    ));
+    testSame(JSChunkGraphBuilder.forChain().addChunk(NAMES + "var c = a.b;").build());
   }
 
   @Test
   public void testUndefinedModuleDep1() {
-    testSame(createModuleChain(
-        "var c = a.xxx;",
-        NAMES
-    ), UNDEFINED_NAME_WARNING);
+    testSame(
+        JSChunkGraphBuilder.forChain().addChunk("var c = a.xxx;").addChunk(NAMES).build(),
+        UNDEFINED_NAME_WARNING);
   }
 
   @Test
@@ -422,33 +435,26 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
   @Test
   public void testLateDefinedName3() {
-    testWarning("var x = {}; x.y.z = {}; x.y = {z: {}};",
-        NAME_DEFINED_LATE_WARNING);
-    testWarning("let x = {}; x.y.z = {}; x.y = {z: {}};",
-        NAME_DEFINED_LATE_WARNING);
-    testWarning("const x = {}; x.y.z = {}; x.y = {z: {}};",
-        NAME_DEFINED_LATE_WARNING);
-    testWarning("var x = {}; x.y.z = {}; x.y = {z};",
-        NAME_DEFINED_LATE_WARNING);
+    testWarning("var x = {}; x.y.z = {}; x.y = {z: {}};", NAME_DEFINED_LATE_WARNING);
+    testWarning("let x = {}; x.y.z = {}; x.y = {z: {}};", NAME_DEFINED_LATE_WARNING);
+    testWarning("const x = {}; x.y.z = {}; x.y = {z: {}};", NAME_DEFINED_LATE_WARNING);
+    testWarning("var x = {}; x.y.z = {}; x.y = {z};", NAME_DEFINED_LATE_WARNING);
   }
 
   @Test
   public void testLateDefinedName4() {
-    testWarning("var x = {}; x.y.z.bar = {}; x.y = {z: {}};",
-        NAME_DEFINED_LATE_WARNING);
+    testWarning("var x = {}; x.y.z.bar = {}; x.y = {z: {}};", NAME_DEFINED_LATE_WARNING);
   }
 
   @Test
   public void testLateDefinedName5() {
-    testWarning("var x = {}; /** @typedef {number} */ x.y.z; x.y = {};",
-        NAME_DEFINED_LATE_WARNING);
+    testWarning("var x = {}; /** @typedef {number} */ x.y.z; x.y = {};", NAME_DEFINED_LATE_WARNING);
   }
 
   @Test
   public void testLateDefinedName6() {
     testWarning(
-        "var x = {}; x.y.prototype.z = 3;" +
-        "/** @constructor */ x.y = function() {};",
+        "var x = {}; x.y.prototype.z = 3;" + "/** @constructor */ x.y = function() {};",
         NAME_DEFINED_LATE_WARNING);
   }
 
@@ -499,16 +505,25 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
   @Test
   public void testBadInterfacePropRef() {
     testWarning(
-        "/** @interface */ function F() {}" +
-         "F.bar();",
-         UNDEFINED_NAME_WARNING);
+        lines(
+            "/** @interface */ function F() {}", //
+            "F.bar();"),
+        UNDEFINED_NAME_WARNING);
+    testWarning(
+        lines(
+            "/** @interface */ function F() {}", //
+            "F.bar?.();"),
+        UNDEFINED_NAME_WARNING);
+    testSame(
+        lines(
+            "/** @interface */ function F() {}", //
+            // ?. after F indicates some uncertainty that F actually exists
+            "F?.bar();"));
   }
 
   @Test
   public void testInterfaceFunctionPropRef() {
-    testSame(
-        "/** @interface */ function F() {}" +
-         "F.call(); F.hasOwnProperty('z');");
+    testSame("/** @interface */ function F() {}" + "F.call(); F.hasOwnProperty('z');");
   }
 
   @Test
@@ -518,8 +533,7 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
 
   @Test
   public void testCustomObjectPrototypeProperties() {
-    testSame("Object.prototype.seal = function() {};" +
-        "var x = {}; x.seal();");
+    testSame("Object.prototype.seal = function() {};" + "var x = {}; x.seal();");
   }
 
   @Test
@@ -531,49 +545,44 @@ public final class CheckGlobalNamesTest extends CompilerTestCase {
   @Test
   public void testIndirectlyDeclaredProperties() {
     testSame(
-        "Function.prototype.inherits = function(ctor) {" +
-        "  this.superClass_ = ctor;" +
-        "};" +
-        "/** @constructor */ function Foo() {}" +
-        "Foo.prototype.bar = function() {};" +
-        "/** @constructor */ function SubFoo() {}" +
-        "SubFoo.inherits(Foo);" +
-        "SubFoo.superClass_.bar();");
+        "Function.prototype.inherits = function(ctor) {"
+            + "  this.superClass_ = ctor;"
+            + "};"
+            + "/** @constructor */ function Foo() {}"
+            + "Foo.prototype.bar = function() {};"
+            + "/** @constructor */ function SubFoo() {}"
+            + "SubFoo.inherits(Foo);"
+            + "SubFoo.superClass_.bar();");
   }
 
   @Test
   public void testGoogInheritsAlias() {
     testSame(
-        "Function.prototype.inherits = function(ctor) {" +
-        "  this.superClass_ = ctor;" +
-        "};" +
-        "/** @constructor */ function Foo() {}" +
-        "Foo.prototype.bar = function() {};" +
-        "/** @constructor */ function SubFoo() {}" +
-        "SubFoo.inherits(Foo);" +
-        "SubFoo.superClass_.bar();");
+        "Function.prototype.inherits = function(ctor) {"
+            + "  this.superClass_ = ctor;"
+            + "};"
+            + "/** @constructor */ function Foo() {}"
+            + "Foo.prototype.bar = function() {};"
+            + "/** @constructor */ function SubFoo() {}"
+            + "SubFoo.inherits(Foo);"
+            + "SubFoo.superClass_.bar();");
   }
 
   @Test
   public void testGoogInheritsAlias2() {
     testWarning(
-        CompilerTypeTestCase.CLOSURE_DEFS +
-        "/** @constructor */ function Foo() {}" +
-        "Foo.prototype.bar = function() {};" +
-        "/** @constructor */ function SubFoo() {}" +
-        "goog.inherits(SubFoo, Foo);" +
-        "SubFoo.superClazz();",
-         UNDEFINED_NAME_WARNING);
+        CompilerTypeTestCase.CLOSURE_DEFS
+            + "/** @constructor */ function Foo() {}"
+            + "Foo.prototype.bar = function() {};"
+            + "/** @constructor */ function SubFoo() {}"
+            + "goog.inherits(SubFoo, Foo);"
+            + "SubFoo.superClazz();",
+        UNDEFINED_NAME_WARNING);
   }
 
   @Test
   public void testGlobalCatch() {
-    testSame(
-        "try {" +
-        "  throw Error();" +
-        "} catch (e) {" +
-        "  console.log(e.name)" +
-        "}");
+    testSame("try {" + "  throw Error();" + "} catch (e) {" + "  console.log(e.name)" + "}");
   }
 
   @Test

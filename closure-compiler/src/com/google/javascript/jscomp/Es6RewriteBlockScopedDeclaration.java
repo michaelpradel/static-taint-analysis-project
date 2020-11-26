@@ -104,8 +104,6 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
     shouldAddTypesOnNewAstNodes = getShouldAddTypesOnNewAstNodes();
     NodeTraversal.traverse(compiler, root, new CollectUndeclaredNames());
     NodeTraversal.traverse(compiler, root, this);
-    // Needed for let / const declarations in .d.ts externs.
-    TranspilationPasses.processTranspile(compiler, externs, transpiledFeatures, this);
     NodeTraversal.traverse(compiler, root, new Es6RenameReferences(renameTable));
     LoopClosureTransformer transformer = new LoopClosureTransformer();
     NodeTraversal.traverse(compiler, root, transformer);
@@ -165,7 +163,7 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
       }
       Var oldVar = scope.getVar(oldName);
       scope.undeclare(oldVar);
-      hoistScope.declare(newName, nameNode, oldVar.input);
+      hoistScope.declare(newName, nameNode, oldVar.getInput());
     }
   }
 
@@ -333,12 +331,12 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
         }
         functionHandledMap.put(function, name);
 
-        if (!loopObjectMap.containsKey(loopNode)) {
-          loopObjectMap.put(loopNode,
-              new LoopObject(
-                  LOOP_OBJECT_NAME + "$" + compiler.getUniqueNameIdSupplier().get()));
-        }
-        LoopObject object = loopObjectMap.get(loopNode);
+        LoopObject object =
+            loopObjectMap.computeIfAbsent(
+                loopNode,
+                (Node k) ->
+                    new LoopObject(
+                        LOOP_OBJECT_NAME + "$" + compiler.getUniqueNameIdSupplier().get()));
         String newPropertyName = createUniquePropertyName(var);
         object.vars.add(var);
         propertyNameMap.put(var, newPropertyName);
@@ -348,7 +346,7 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
     }
 
     private String createUniquePropertyName(Var var) {
-      return LOOP_OBJECT_PROPERTY_NAME + var.name + "$" + uniqueNameIdSupplier.get();
+      return LOOP_OBJECT_PROPERTY_NAME + var.getName() + "$" + uniqueNameIdSupplier.get();
     }
 
     private void transformLoopClosure() {
@@ -544,9 +542,9 @@ public final class Es6RewriteBlockScopedDeclaration extends AbstractPostOrderCal
               FunctionType.builder(compiler.getTypeRegistry())
                   .withName("")
                   .withSourceNode(iife)
-                  .withParamsNode(compiler.getTypeRegistry().createParameters(objectTypes))
+                  .withParameters(compiler.getTypeRegistry().createParameters(objectTypes))
                   .withReturnType(function.getJSType())
-                  .build();
+                  .buildAndResolve();
           iife.setJSType(iifeType);
         }
         compiler.reportChangeToChangeScope(iife);

@@ -34,6 +34,10 @@
  * @constructor
  * @param {*=} opt_description
  * @return {symbol}
+ * @nosideeffects
+ * Note: calling `new Symbol('x');` will always throw, but we mark this
+ * nosideeffects because the compiler does not promise to preserve all coding
+ * errors.
  */
 function Symbol(opt_description) {}
 
@@ -165,7 +169,7 @@ function Iterable() {}
 // TODO(johnlenz): remove the suppression when the compiler understands
 // "symbol" natively
 /**
- * @return {!Iterator<VALUE>}
+ * @return {!Iterator<VALUE, ?, *>}
  * @suppress {externsValidation}
  */
 Iterable.prototype[Symbol.iterator] = function() {};
@@ -173,8 +177,10 @@ Iterable.prototype[Symbol.iterator] = function() {};
 
 
 /**
+ * TODO(b/142881197): UNUSED_RETURN_T and UNUSED_NEXT_T are not yet used for
+ * anything. https://github.com/google/closure-compiler/issues/3489
  * @interface
- * @template VALUE
+ * @template VALUE, UNUSED_RETURN_T, UNUSED_NEXT_T
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/The_Iterator_protocol
  */
 function Iterator() {}
@@ -188,8 +194,9 @@ Iterator.prototype.next = function(opt_value) {};
 
 /**
  * Use this to indicate a type is both an Iterator and an Iterable.
+ *
  * @interface
- * @extends {Iterator<T>}
+ * @extends {Iterator<T, ?, *>}
  * @extends {Iterable<T>}
  * @template T
  */
@@ -200,7 +207,7 @@ function IteratorIterable() {}
 
 /**
  * @interface
- * @template KEY1, VALUE1
+ * @template IOBJECT_KEY, IOBJECT_VALUE
  */
 function IObject() {}
 
@@ -368,8 +375,23 @@ function parseFloat(num) {}
  */
 function parseInt(num, base) {}
 
+
 /**
- * @param {string} code
+ * Represents a string of JavaScript code that is known to have come from a
+ * trusted source. Part of Trusted Types.
+ *
+ * The main body Trusted Types type definitions reside in the  file
+ * `w3c_trusted_types.js`. This definition was placed here so that it would be
+ * accessible to `eval()`.
+ *
+ * @constructor
+ * @see https://w3c.github.io/webappsec-trusted-types/dist/spec/#trusted-script
+ */
+function TrustedScript() {}
+
+
+/**
+ * @param {string|!TrustedScript} code
  * @return {*}
  * @see http://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval
  */
@@ -617,7 +639,7 @@ Function.prototype.toString = function() {};
  * @implements {IArrayLike<T>}
  * @implements {Iterable<T>}
  * @param {...*} var_args
- * @return {!Array<?>}
+ * @return {!Array}
  * @nosideeffects
  * @template T
  * @see http://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array
@@ -1020,6 +1042,68 @@ Number.NEGATIVE_INFINITY;
  * @see http://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/POSITIVE_INFINITY
  */
 Number.POSITIVE_INFINITY;
+
+/**
+ * @constructor
+ * @param {number|string|bigint} arg
+ * @return {bigint}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt
+ */
+function BigInt(arg) {}
+
+/**
+ * Wraps a BigInt value to a signed integer between -2^(width-1) and
+ * 2^(width-1)-1.
+ * @param {number} width
+ * @param {bigint} bigint
+ * @return {bigint}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt/asIntN
+ */
+BigInt.asIntN = function(width, bigint) {};
+
+/**
+ * Wraps a BigInt value to an unsigned integer between 0 and (2^width)-1.
+ * @param {number} width
+ * @param {bigint} bigint
+ * @return {bigint}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt/asUintN
+ */
+BigInt.asUintN = function(width, bigint) {};
+
+/**
+ * Returns a string with a language-sensitive representation of this BigInt.
+ * @param {string|!Array<string>=} locales
+ * @param {Object=} options
+ * @return {string}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt/toLocaleString
+ * @override
+ */
+BigInt.prototype.toLocaleString = function(locales, options) {};
+
+/**
+ * Returns a string representing the specified BigInt object. The trailing "n"
+ * is not part of the string.
+ * @this {BigInt|bigint}
+ * @param {number=} radix
+ * @return {string}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt/toString
+ * @override
+ */
+BigInt.prototype.toString = function(radix) {};
+
+/**
+ * Returns the wrapped primitive value of a BigInt object.
+ * @return {bigint}
+ * @nosideeffects
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt/valueOf
+ * @override
+ */
+BigInt.prototype.valueOf = function() {};
 
 
 /**
@@ -2392,7 +2476,6 @@ function TypeError(opt_message, opt_file, opt_line) {}
  * @see http://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/URIError
  */
 function URIError(opt_message, opt_file, opt_line) {}
-
 
 // JScript extensions.
 // @see http://msdn.microsoft.com/en-us/library/894hfyb4(VS.80).aspx

@@ -47,21 +47,23 @@ import static com.google.common.base.Preconditions.checkState;
 import com.google.common.annotations.GwtIncompatible;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ascii;
-import com.google.common.base.Objects;
 import com.google.common.collect.ImmutableList;
 import com.google.errorprone.annotations.DoNotCall;
+import com.google.javascript.jscomp.colors.Color;
 import com.google.javascript.rhino.StaticSourceFile.SourceKind;
 import com.google.javascript.rhino.jstype.JSType;
 import java.io.IOException;
 import java.io.ObjectInput;
 import java.io.ObjectOutput;
 import java.io.Serializable;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import javax.annotation.CheckReturnValue;
@@ -77,18 +79,18 @@ public class Node implements Serializable {
   private static final long serialVersionUID = 1L;
 
   private enum Prop {
+    // Is this Node within parentheses
+    IS_PARENTHESIZED,
     // Contains non-JSDoc comment
     NON_JSDOC_COMMENT,
     // Contains a JSDocInfo object
     JSDOC_INFO,
-    // The name node is a variable length argument placeholder.
-    VAR_ARGS,
+    // Contains a Color object
+    COLOR,
     // Whether incrdecr is pre (false) or post (true)
     INCRDECR,
     // Set to indicate a quoted object lit key
     QUOTED,
-    // The name node is an optional argument.
-    OPT_ARG,
     // A synthetic block. Used to make processing simpler, and does not represent a real block in
     // the source.
     SYNTHETIC,
@@ -158,6 +160,8 @@ public class Node implements Serializable {
     // The type of an expression before the cast. This will be present only if the expression is
     // casted.
     TYPE_BEFORE_CAST,
+    // Indicates that this epxression was casted but we don't necessarily know to which type
+    COLOR_FROM_CAST,
     // The node is an optional parameter or property in ES6 Typed syntax.
     OPT_ES6_TYPED,
     // Generic type list in ES6 typed syntax.
@@ -180,9 +184,6 @@ public class Node implements Serializable {
     GOOG_MODULE_REQUIRE,
     // Attaches a FeatureSet to SCRIPT nodes.
     FEATURE_SET,
-    // Indicates that a STRING node represents a namespace from goog.module() or goog.require()
-    // call.
-    IS_MODULE_NAME,
     // Indicates a namespace that was provided at some point in the past.
     WAS_PREVIOUSLY_PROVIDED,
     // Indicates that a SCRIPT represents a transpiled file
@@ -207,6 +208,12 @@ public class Node implements Serializable {
     TYPEDEF_TYPE,
     // Original name of a goog.define call.
     DEFINE_NAME,
+    // Indicate that a OPTCHAIN_GETPROP, OPTCHAIN_GETELEM, or OPTCHAIN_CALL is the start of an
+    // optional chain.
+    START_OF_OPT_CHAIN,
+    // Indicates a trailing comma in an array literal, object literal, parameter list, or argument
+    // list
+    TRAILING_COMMA,
   }
 
   /**
@@ -229,6 +236,17 @@ public class Node implements Serializable {
   public final Node setNonJSDocComment(NonJSDocComment comment) {
     putProp(Prop.NON_JSDOC_COMMENT, comment);
     return this;
+  }
+
+  /** Sets whether this node is inside parentheses. */
+  public final void setIsParenthesized(boolean b) {
+    checkState(IR.mayBeExpression(this));
+    putBooleanProp(Prop.IS_PARENTHESIZED, b);
+  }
+
+  /** Check whether node was inside parentheses. */
+  public final boolean getIsParenthesized() {
+    return getBooleanProp(Prop.IS_PARENTHESIZED);
   }
 
   // TODO(sdh): Get rid of these by using accessor methods instead.
@@ -261,7 +279,6 @@ public class Node implements Serializable {
   public static final Prop PARSE_RESULTS = Prop.PARSE_RESULTS;
   public static final Prop GOOG_MODULE = Prop.GOOG_MODULE;
   public static final Prop FEATURE_SET = Prop.FEATURE_SET;
-  public static final Prop IS_MODULE_NAME = Prop.IS_MODULE_NAME;
   public static final Prop WAS_PREVIOUSLY_PROVIDED = Prop.WAS_PREVIOUSLY_PROVIDED;
   public static final Prop TRANSPILED = Prop.TRANSPILED;
   public static final Prop MODULE_ALIAS = Prop.MODULE_ALIAS;
@@ -356,6 +373,39 @@ public class Node implements Serializable {
     }
   }
 
+  private static final class BigIntNode extends Node {
+    private static final long serialVersionUID = 1L;
+
+    BigIntNode(BigInteger bigint) {
+      super(Token.BIGINT);
+      setBigInt(bigint);
+    }
+
+    @Override
+    public BigInteger getBigInt() {
+      return this.bigint;
+    }
+
+    @Override
+    public void setBigInt(BigInteger number) {
+      this.bigint = number;
+    }
+
+    @Override
+    public boolean isEquivalentTo(
+        Node node, boolean compareType, boolean recur, boolean jsDoc, boolean sideEffect) {
+      return super.isEquivalentTo(node, compareType, recur, jsDoc, sideEffect)
+          && getBigInt().equals(node.getBigInt());
+    }
+
+    private BigInteger bigint;
+
+    @Override
+    public BigIntNode cloneNode(boolean cloneTypeExprs) {
+      return copyNodeFields(new BigIntNode(bigint), cloneTypeExprs);
+    }
+  }
+
   private static final class StringNode extends Node {
 
     private static final long serialVersionUID = 1L;
@@ -403,8 +453,8 @@ public class Node implements Serializable {
         Node node, boolean compareType, boolean recur, boolean jsDoc, boolean sideEffect) {
       // NOTE: we take advantage of the string interning done in #setString and use
       // '==' rather than 'equals' here to avoid doing unnecessary string equalities.
-      return (super.isEquivalentTo(node, compareType, recur, jsDoc, sideEffect)
-          && this.str == (((StringNode) node).str));
+      return super.isEquivalentTo(node, compareType, recur, jsDoc, sideEffect)
+          && this.str == ((StringNode) node).str;
     }
 
     /**
@@ -507,7 +557,7 @@ public class Node implements Serializable {
       // '==' rather than 'equals' here to avoid doing unnecessary string equalities.
       return (super.isEquivalentTo(node, compareType, recur, jsDoc, sideEffect)
           && this.raw == ((TemplateLiteralSubstringNode) node).raw
-          && Objects.equal(this.cooked, ((TemplateLiteralSubstringNode) node).cooked));
+          && Objects.equals(this.cooked, ((TemplateLiteralSubstringNode) node).cooked));
     }
 
     @Override
@@ -705,6 +755,10 @@ public class Node implements Serializable {
 
   public static Node newNumber(double number, int lineno, int charno) {
     return new NumberNode(number, lineno, charno);
+  }
+
+  public static Node newBigInt(BigInteger bigint) {
+    return new BigIntNode(bigint);
   }
 
   public static Node newString(String str) {
@@ -1207,6 +1261,22 @@ public class Node implements Serializable {
     return (JSType) getProp(Prop.TYPE_BEFORE_CAST);
   }
 
+  /**
+   * Indicate that this node's color comes from a type assertion. Only set when colors are present;
+   * when JSTypes are on the AST we instead preserve the actual JSType before the type assertion.
+   */
+  public final void setColorFromTypeCast() {
+    checkState(getColor() != null, "Only use on nodes with colors present");
+    putBooleanProp(Prop.COLOR_FROM_CAST, true);
+  }
+
+  /**
+   * Indicates that this node's color comes from a type assertion. Only set when colors are present.
+   */
+  public final boolean isColorFromTypeCast() {
+    return getBooleanProp(Prop.COLOR_FROM_CAST);
+  }
+
   // Gets all the property types, in sorted order.
   private byte[] getSortedPropTypes() {
     int count = 0;
@@ -1244,7 +1314,29 @@ public class Node implements Serializable {
       throw new IllegalStateException(
           "Number node not created with Node.newNumber");
     } else {
-      throw new UnsupportedOperationException(this + " is not a string node");
+      throw new UnsupportedOperationException(this + " is not a number node");
+    }
+  }
+
+  /** Can only be called when <code>getType() == TokenStream.BIGINT</code> */
+  public BigInteger getBigInt() {
+    if (this.token == Token.BIGINT) {
+      throw new IllegalStateException("BigInt node not created with Node.newBigInt");
+    } else {
+      throw new UnsupportedOperationException(this + " is not a bigint node");
+    }
+  }
+
+  /**
+   * Can only be called when <code>getType() == Token.BIGINT</code>
+   *
+   * @param value value to set.
+   */
+  public void setBigInt(BigInteger value) {
+    if (this.token == Token.BIGINT) {
+      throw new IllegalStateException("BigInt node not created with Node.newBigInt");
+    } else {
+      throw new UnsupportedOperationException(this + " is not a bigint node");
     }
   }
 
@@ -1563,6 +1655,10 @@ public class Node implements Serializable {
   // Returns the 0-based column number
   public final int getCharno() {
     return extractCharno(sourcePosition);
+  }
+
+  public final String getLocation() {
+    return this.getSourceFileName() + ":" + this.getLineno() + ":" + this.getCharno();
   }
 
   // TODO(johnlenz): make this final
@@ -1956,7 +2052,9 @@ public class Node implements Serializable {
       return false;
     }
 
-    if (compareType && !JSType.isEquivalent(getJSType(), node.getJSType())) {
+    if (compareType
+        && (!Objects.equals(getJSType(), node.getJSType())
+            || !Objects.equals(getColor(), node.getColor()))) {
       return false;
     }
 
@@ -1974,7 +2072,7 @@ public class Node implements Serializable {
     }
 
     for (Function<Node, Object> getter : PROP_GETTERS_FOR_EQUALITY) {
-      if (!Objects.equal(getter.apply(this), getter.apply(node))) {
+      if (!Objects.equals(getter.apply(this), getter.apply(node))) {
         return false;
       }
     }
@@ -2019,6 +2117,7 @@ public class Node implements Serializable {
           Node::isAsyncFunction,
           Node::isAsyncGeneratorFunction,
           Node::isGeneratorFunction,
+          Node::isOptionalChainStart,
           Node::isStaticMember,
           Node::isYieldAll,
           (n) -> n.getIntProp(Prop.SLASH_V),
@@ -2100,7 +2199,7 @@ public class Node implements Serializable {
    */
   @Nullable
   public final String getOriginalQualifiedName() {
-    if (token == Token.NAME || getBooleanProp(Prop.IS_MODULE_NAME)) {
+    if (token == Token.NAME) {
       String name = getOriginalName();
       if (name == null) {
         name = getString();
@@ -2153,7 +2252,7 @@ public class Node implements Serializable {
    * <code>x</code>, returns false if this is not a NAME node.
    */
   public final boolean matchesName(String name) {
-    if (token != token.NAME) {
+    if (token != Token.NAME) {
       return false;
     }
     String internalString = getString();
@@ -2168,7 +2267,7 @@ public class Node implements Serializable {
    */
   @SuppressWarnings("ReferenceEquality")
   public final boolean matchesName(Node n) {
-    if (token != token.NAME || n.token != Token.NAME) {
+    if (token != Token.NAME || n.token != Token.NAME) {
       return false;
     }
 
@@ -2279,9 +2378,11 @@ public class Node implements Serializable {
   // Mutators
 
   /**
-   * Removes this node from its parent. Equivalent to:
-   * node.getParent().removeChild();
+   * Removes this node from its parent.
+   *
+   * @deprecated use {@link #detach()} instead. The behavior is equivalent.
    */
+  @Deprecated
   public final Node detachFromParent() {
     return detach();
   }
@@ -2379,7 +2480,7 @@ public class Node implements Serializable {
     if (cloneTypeExprs) {
       JSDocInfo info = this.getJSDocInfo();
       if (info != null) {
-        this.setJSDocInfo(info.clone(true));
+        dst.setJSDocInfo(info.clone(true));
       }
     }
     return dst;
@@ -2509,6 +2610,27 @@ public class Node implements Serializable {
   }
 
   /**
+   * Returns the compiled inferred type on this node. Not to be confused with {@link
+   * #getDeclaredTypeExpression()} which returns the syntactically specified type.
+   */
+  @Nullable
+  public final Color getColor() {
+    return (Color) getProp(Prop.COLOR);
+  }
+
+  public final Node setColor(@Nullable Color jstype) {
+    putProp(Prop.COLOR, jstype);
+    return this;
+  }
+
+  /** Copies a nodes JSTYpe and Color (if present) */
+  public final Node copyTypeFrom(Node other) {
+    this.jstype = other.jstype;
+    this.setColor(other.getColor());
+    return this;
+  }
+
+  /**
    * Get the {@link JSDocInfo} attached to this node.
    *
    * @return the information or {@code null} if no JSDoc is attached to this node
@@ -2574,42 +2696,6 @@ public class Node implements Serializable {
   /** Whether this {x:x} property was originally parsed as {x}. */
   public final boolean isShorthandProperty() {
     return getBooleanProp(Prop.IS_SHORTHAND_PROPERTY);
-  }
-
-  /**
-   * Sets whether this node is a variable length argument node. This
-   * method is meaningful only on {@link Token#NAME} nodes
-   * used to define a {@link Token#FUNCTION}'s argument list.
-   */
-  public final void setVarArgs(boolean varArgs) {
-    putBooleanProp(Prop.VAR_ARGS, varArgs);
-  }
-
-  /**
-   * Returns whether this node is a variable length argument node. This
-   * method's return value is meaningful only on {@link Token#NAME} nodes
-   * used to define a {@link Token#FUNCTION}'s argument list.
-   */
-  public final boolean isVarArgs() {
-    return getBooleanProp(Prop.VAR_ARGS);
-  }
-
-  /**
-   * Sets whether this node is an optional argument node. This
-   * method is meaningful only on {@link Token#NAME} nodes
-   * used to define a {@link Token#FUNCTION}'s argument list.
-   */
-  public final void setOptionalArg(boolean optionalArg) {
-    putBooleanProp(Prop.OPT_ARG, optionalArg);
-  }
-
-  /**
-   * Returns whether this node is an optional argument node. This
-   * method's return value is meaningful only on {@link Token#NAME} nodes
-   * used to define a {@link Token#FUNCTION}'s argument list.
-   */
-  public final boolean isOptionalArg() {
-    return getBooleanProp(Prop.OPT_ARG);
   }
 
   /**
@@ -2738,6 +2824,24 @@ public class Node implements Serializable {
   }
 
   /**
+   * Sets whether this node is the start of an optional chain. This method is meaningful only on
+   * {@link Token#OPTCHAIN_GETELEM}, {@link Token#OPTCHAIN_GETPROP}, {@link Token#OPTCHAIN_CALL}
+   */
+  public final void setIsOptionalChainStart(boolean isOptionalChainStart) {
+    checkState(
+        !isOptionalChainStart || isOptChainGetElem() || isOptChainGetProp() || isOptChainCall(),
+        "cannot make a non-optional node the start of an optional chain.");
+    putBooleanProp(Prop.START_OF_OPT_CHAIN, isOptionalChainStart);
+  }
+
+  /**
+   * Returns whether this node is an optional chaining node.
+   */
+  public final boolean isOptionalChainStart() {
+    return getBooleanProp(Prop.START_OF_OPT_CHAIN);
+  }
+
+  /**
    * Sets whether this node is a arrow function node. This
    * method is meaningful only on {@link Token#FUNCTION}
    */
@@ -2802,6 +2906,16 @@ public class Node implements Serializable {
     putProp(Prop.DEFINE_NAME, name);
   }
 
+  /** Indicates that there was a trailing comma in this list */
+  public final void setTrailingComma(boolean hasTrailingComma) {
+    putBooleanProp(Prop.TRAILING_COMMA, hasTrailingComma);
+  }
+
+  /** Returns true if there was a trailing comma in the orginal code */
+  public final boolean hasTrailingComma() {
+    return getBooleanProp(Prop.TRAILING_COMMA);
+  }
+
   /**
    * Marks this function or constructor call's side effect flags.
    * This property is only meaningful for {@link Token#CALL} and
@@ -2809,7 +2923,7 @@ public class Node implements Serializable {
    */
   public final void setSideEffectFlags(int flags) {
     checkState(
-        this.isCall() || this.isNew() || this.isTaggedTemplateLit(),
+        this.isCall() || this.isOptChainCall() || this.isNew() || this.isTaggedTemplateLit(),
         "Side-effect flags can only be set on invocation nodes; got %s",
         this);
 
@@ -2845,7 +2959,6 @@ public class Node implements Serializable {
    *   <li>Is the receiver (`this`) mutated? ({@code MUTATES_THIS})
    *   <li>Are any arguments mutated? ({@code MUTATES_ARGUMENTS})
    *   <li>Does the call throw an error? ({@code THROWS})
-   *   <li>Is the return an escaped (mutable by other code) value? ({@code ESCAPED_RETURN})
    * </ol>
    *
    * @author johnlenz@google.com (John Lenz)
@@ -2855,18 +2968,14 @@ public class Node implements Serializable {
     public static final int MUTATES_THIS = 2;
     public static final int MUTATES_ARGUMENTS = 4;
     public static final int THROWS = 8;
-    public static final int ESCAPED_RETURN = 16;
 
-    private static final int USED_BITS_MASK = (1 << 5) - 1;
-
-    // TODO(nickreid): Delete one of these values. They should be symmetric with respect to
-    // inversion. We need better noenclature to describe ESCAPED_RETURN.
-    public static final int NO_SIDE_EFFECTS = ESCAPED_RETURN;
+    private static final int USED_BITS_MASK = (1 << 4) - 1;
+    private static final int NO_SIDE_EFFECTS = 0;
     public static final int ALL_SIDE_EFFECTS =
-        MUTATES_GLOBAL_STATE | MUTATES_THIS | MUTATES_ARGUMENTS | THROWS | ESCAPED_RETURN;
+        MUTATES_GLOBAL_STATE | MUTATES_THIS | MUTATES_ARGUMENTS | THROWS;
 
-    // A bitfield indicating the flag statuses. All bits set to 1 means "global state changes and
-    // unknown locality of result".
+    // A bitfield indicating the flag statuses. All used bits set to 1 means "global state changes".
+    // A value of 0 means "no side effects"
     private int value = ALL_SIDE_EFFECTS;
 
     public SideEffectFlags() {
@@ -2886,18 +2995,10 @@ public class Node implements Serializable {
       return this;
     }
 
-    /** No side-effects occur and the returned results are local. */
+    /** No side-effects occur */
     public SideEffectFlags clearAllFlags() {
-      value = NO_SIDE_EFFECTS & ~ESCAPED_RETURN;
+      value = NO_SIDE_EFFECTS;
       return this;
-    }
-
-    /**
-     * Preserve the return result flag, but clear the others:
-     *   no global state change, no throws, no this change, no arguments change
-     */
-    public void clearSideEffectFlags() {
-      value &= ESCAPED_RETURN;
     }
 
     public SideEffectFlags setMutatesGlobalState() {
@@ -2921,11 +3022,6 @@ public class Node implements Serializable {
       return this;
     }
 
-    public SideEffectFlags setReturnsTainted() {
-      value |= ESCAPED_RETURN;
-      return this;
-    }
-
     @Override
     @DoNotCall // For debugging only.
     public String toString() {
@@ -2943,40 +3039,26 @@ public class Node implements Serializable {
       if ((value & MUTATES_ARGUMENTS) != 0) {
         builder.append("args ");
       }
-      if ((value & ESCAPED_RETURN) != 0) {
-        builder.append("return ");
-      }
 
       return builder.toString();
     }
   }
 
-  /**
-   * @return Whether the only side-effect is "modifies this"
-   */
+  /** Returns whether the only side-effect is "modifies this" or there are no side effects. */
   public final boolean isOnlyModifiesThisCall() {
-    int consideredFlags = getSideEffectFlags();
-    consideredFlags |= SideEffectFlags.NO_SIDE_EFFECTS; // Set non-side-effect bits to 1.
-
     // TODO(nickreid): Delete this; check if MUTATES_THIS is actually set. This was left in to
     // maintain existing behaviour but it makes the name of this method misleading.
-    consideredFlags &= ~SideEffectFlags.MUTATES_THIS;
-
-    return consideredFlags == SideEffectFlags.NO_SIDE_EFFECTS;
+    int sideEffectsBesidesMutatesThis = getSideEffectFlags() & ~SideEffectFlags.MUTATES_THIS;
+    return sideEffectsBesidesMutatesThis == SideEffectFlags.NO_SIDE_EFFECTS;
   }
 
-  /**
-   * @return Whether the only side-effect is "modifies arguments"
-   */
+  /** Returns whether the only side-effect is "modifies arguments" or there are no side effects. */
   public final boolean isOnlyModifiesArgumentsCall() {
-    int consideredFlags = getSideEffectFlags();
-    consideredFlags |= SideEffectFlags.NO_SIDE_EFFECTS; // Set non-side-effect bits to 1.
-
     // TODO(nickreid): Delete this; check if MUTATES_ARGUMENTS is actually set. This was left in to
     // maintain existing behaviour but it makes the name of this method misleading.
-    consideredFlags &= ~SideEffectFlags.MUTATES_ARGUMENTS;
-
-    return consideredFlags == SideEffectFlags.NO_SIDE_EFFECTS;
+    int sideEffectsBesidesMutatesArguments =
+        getSideEffectFlags() & ~SideEffectFlags.MUTATES_ARGUMENTS;
+    return sideEffectsBesidesMutatesArguments == SideEffectFlags.NO_SIDE_EFFECTS;
   }
 
   /**
@@ -2984,19 +3066,7 @@ public class Node implements Serializable {
    * has no side effects.
    */
   public final boolean isNoSideEffectsCall() {
-    int consideredFlags = getSideEffectFlags();
-    consideredFlags |= SideEffectFlags.NO_SIDE_EFFECTS; // Set non-side-effect bits to 1.
-
-    return consideredFlags == SideEffectFlags.NO_SIDE_EFFECTS;
-  }
-
-  /**
-   * Returns true if this node is a function or constructor call that
-   * returns a primitive or a local object (an object that has no other
-   * references).
-   */
-  public final boolean isLocalResultCall() {
-    return !allBitsSet(getSideEffectFlags(), SideEffectFlags.ESCAPED_RETURN);
+    return getSideEffectFlags() == SideEffectFlags.NO_SIDE_EFFECTS;
   }
 
   /** Returns true if this is a new/call that may mutate its arguments. */
@@ -3184,6 +3254,10 @@ public class Node implements Serializable {
     return this.token == Token.AWAIT;
   }
 
+  public final boolean isBigInt() {
+    return this.token == Token.BIGINT;
+  }
+
   public final boolean isBreak() {
     return this.token == Token.BREAK;
   }
@@ -3264,6 +3338,14 @@ public class Node implements Serializable {
     return this.token == Token.EMPTY;
   }
 
+  public final boolean isExponent() {
+    return this.token == Token.EXPONENT;
+  }
+
+  public final boolean isAssignExponent() {
+    return this.token == Token.ASSIGN_EXPONENT;
+  }
+
   public final boolean isExport() {
     return this.token == Token.EXPORT;
   }
@@ -3326,6 +3408,10 @@ public class Node implements Serializable {
 
   public final boolean isImport() {
     return this.token == Token.IMPORT;
+  }
+
+  public final boolean isImportMeta() {
+    return this.token == Token.IMPORT_META;
   }
 
   public final boolean isImportStar() {
@@ -3412,6 +3498,10 @@ public class Node implements Serializable {
     return this.token == Token.NULL;
   }
 
+  public final boolean isNullishCoalesce() {
+    return this.token == Token.COALESCE;
+  }
+
   public final boolean isNumber() {
     return this.token == Token.NUMBER;
   }
@@ -3422,6 +3512,18 @@ public class Node implements Serializable {
 
   public final boolean isObjectPattern() {
     return this.token == Token.OBJECT_PATTERN;
+  }
+
+  public final boolean isOptChainCall() {
+    return this.token == Token.OPTCHAIN_CALL;
+  }
+
+  public final boolean isOptChainGetElem() {
+    return this.token == Token.OPTCHAIN_GETELEM;
+  }
+
+  public final boolean isOptChainGetProp() {
+    return this.token == Token.OPTCHAIN_GETPROP;
   }
 
   public final boolean isOr() {
@@ -3438,6 +3540,10 @@ public class Node implements Serializable {
 
   public final boolean isRest() {
     return this.token == Token.ITER_REST || this.token == Token.OBJECT_REST;
+  }
+
+  public final boolean isObjectRest() {
+    return this.token == Token.OBJECT_REST;
   }
 
   public final boolean isReturn() {

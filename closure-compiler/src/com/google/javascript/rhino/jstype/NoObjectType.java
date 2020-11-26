@@ -62,24 +62,17 @@ public class NoObjectType extends FunctionType {
   private static final long serialVersionUID = 1L;
 
   NoObjectType(JSTypeRegistry registry) {
-    super(FunctionType.builder(registry).forConstructor().forNativeType());
-    getInternalArrowType().returnType = this;
-    this.setInstanceType(this);
+    super(
+        FunctionType.builder(registry)
+            .withKind(FunctionType.Kind.NONE)
+            .withReturnsOwnInstanceType()
+            .forNativeType());
+    this.eagerlyResolveToSelf();
   }
 
   @Override
-  public boolean isSubtype(JSType that) {
-    return isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    if (JSType.isSubtypeHelper(this, that, implicitImplCache, subtypingMode)) {
-      return true;
-    } else {
-      return that.isObject() && !that.isNoType() && !that.isNoResolvedType();
-    }
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.NO_OBJECT;
   }
 
   @Override
@@ -90,11 +83,6 @@ public class NoObjectType extends FunctionType {
   @Override
   public boolean isNoObjectType() {
     return true;
-  }
-
-  @Override
-  public final boolean isConstructor() {
-    return false;
   }
 
   @Override
@@ -158,8 +146,8 @@ public class NoObjectType extends FunctionType {
   }
 
   @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(forAnnotations ? "?" : "NoObject");
+  void appendTo(TypeStringBuilder sb) {
+    sb.append(sb.isForAnnotations() ? "?" : "NoObject");
   }
 
   @Override
@@ -169,6 +157,6 @@ public class NoObjectType extends FunctionType {
 
   @Override
   final JSType resolveInternal(ErrorReporter reporter) {
-    return this;
+    throw new AssertionError();
   }
 }

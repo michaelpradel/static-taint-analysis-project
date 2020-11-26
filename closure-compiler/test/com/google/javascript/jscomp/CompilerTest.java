@@ -19,6 +19,7 @@ import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static com.google.javascript.jscomp.CompilerTestCase.lines;
+import static com.google.javascript.jscomp.TypeValidator.TYPE_MISMATCH_WARNING;
 import static com.google.javascript.jscomp.testing.JSCompCorrespondences.DIAGNOSTIC_EQUALITY;
 import static com.google.javascript.jscomp.testing.JSErrorSubject.assertError;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -40,6 +41,7 @@ import com.google.javascript.rhino.InputId;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.StaticSourceFile.SourceKind;
 import com.google.javascript.rhino.Token;
+import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -48,6 +50,7 @@ import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.StringWriter;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -56,8 +59,6 @@ import java.util.Map;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-
-/** @author johnlenz@google.com (John Lenz) */
 
 @RunWith(JUnit4.class)
 public final class CompilerTest {
@@ -108,7 +109,9 @@ public final class CompilerTest {
         SourceFile.fromCode(
             "mix", "goog.require('gin'); goog.require('tonic');"));
     CompilerOptions options = new CompilerOptions();
-    options.setIdeMode(true);
+    options.setChecksOnly(true);
+    options.setContinueAfterErrors(true);
+    options.setAllowHotswapReplaceScript(true);
     options.setDependencyOptions(DependencyOptions.pruneLegacyForEntryPoints(ImmutableList.of()));
     Compiler compiler = new Compiler();
     compiler.init(ImmutableList.<SourceFile>of(), inputs, options);
@@ -1124,10 +1127,10 @@ public final class CompilerTest {
   }
 
   @Test
-  public void testIdeModeSkipsOptimizations() {
+  public void testChecksOnlyModeSkipsOptimizations() {
     Compiler compiler = new Compiler();
     CompilerOptions options = createNewFlagBasedOptions();
-    options.setIdeMode(true);
+    options.setChecksOnly(true);
 
     final boolean[] before = new boolean[1];
     final boolean[] after = new boolean[1];
@@ -1397,31 +1400,6 @@ public final class CompilerTest {
   private void assertExternIndex(Compiler compiler, int index, String name) {
     assertThat(compiler.externsRoot.getChildAtIndex(index))
         .isSameInstanceAs(compiler.getInput(new InputId(name)).getAstRoot(compiler));
-  }
-
-  @Test
-  public void testEs6ModuleEntryPoint() throws Exception {
-    List<SourceFile> inputs = ImmutableList.of(
-        SourceFile.fromCode("/index.js", "import foo from './foo.js'; foo('hello');"),
-        SourceFile.fromCode("/foo.js", "export default (foo) => { alert(foo); }"));
-
-    List<ModuleIdentifier> entryPoints = ImmutableList.of(
-        ModuleIdentifier.forFile("/index"));
-
-    CompilerOptions options = createNewFlagBasedOptions();
-    options.setLanguageIn(CompilerOptions.LanguageMode.ECMASCRIPT_2017);
-    options.setLanguageOut(CompilerOptions.LanguageMode.ECMASCRIPT5);
-    options.setDependencyOptions(DependencyOptions.pruneLegacyForEntryPoints(entryPoints));
-
-    List<SourceFile> externs =
-        AbstractCommandLineRunner.getBuiltinExterns(options.getEnvironment());
-
-    Compiler compiler = new Compiler();
-    compiler.compile(externs, inputs, options);
-
-    Result result = compiler.getResult();
-    assertThat(result.warnings).isEmpty();
-    assertThat(result.errors).isEmpty();
   }
 
   // https://github.com/google/closure-compiler/issues/2692
@@ -2654,5 +2632,35 @@ public final class CompilerTest {
     assertThat(compiler.getErrors()).hasSize(1);
     assertError(getOnlyElement(compiler.getErrors()))
         .hasMessage("File strongly reachable from an entry point must not be weak: weak.js");
+  }
+
+  @Test
+  public void testTypesAreRemoved() {
+    CompilerOptions options = new CompilerOptions();
+    options.setCheckTypes(true);
+    SourceFile input =
+        SourceFile.fromCode(
+            "input.js",
+            lines(
+                "/** @license @type {!Foo} */",
+                "class Foo {}",
+                "class Bar {}",
+                "/** @typedef {number} */ let Num;",
+                "const n = /** @type {!Num} */ (5);",
+                "var /** !Foo */ f = new Bar;"));
+    Compiler compiler = new Compiler();
+    WeakReference<JSTypeRegistry> registryWeakReference =
+        new WeakReference<>(compiler.getTypeRegistry());
+    compiler.compile(EMPTY_EXTERNS.get(0), input, options);
+
+    // Just making sure that typechecking ran and didn't crash.  It would be reasonable
+    // for there also to be other type errors in this code before the final null assignment.
+    assertThat(compiler.getWarnings()).hasSize(1);
+    assertError(compiler.getWarnings().get(0)).hasType(TYPE_MISMATCH_WARNING);
+
+    System.gc();
+    System.runFinalization();
+
+    assertThat(registryWeakReference.get()).isNull();
   }
 }

@@ -21,6 +21,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import com.google.javascript.jscomp.parsing.parser.FeatureSet;
 import com.google.javascript.rhino.Node;
 import com.google.javascript.rhino.jstype.TernaryValue;
+import java.math.BigInteger;
 
 /**
  * An abstract class whose implementations run peephole optimizations:
@@ -113,6 +114,23 @@ abstract class AbstractPeepholeOptimization {
   }
 
   /**
+   * Returns the bigint value of the node if it has one and it cannot have side effects.
+   *
+   * <p>Returns {@code null} otherwise.
+   */
+  protected BigInteger getSideEffectFreeBigIntValue(Node n) {
+    BigInteger value = NodeUtil.getBigIntValue(n);
+    // Calculating the bigint value, if any, is likely to be faster than calculating side effects,
+    // and there are only a very few cases where we can compute a bigint value, but there could
+    // also be side effects. e.g. `void doSomething()` has value NaN, regardless of the behavior
+    // of `doSomething()`
+    if (value != null && astAnalyzer.mayHaveSideEffects(n)) {
+      value = null;
+    }
+    return value;
+  }
+
+  /**
    * Gets the value of a node as a String, or {@code null} if it cannot be converted.
    *
    * <p>This method effectively emulates the <code>String()</code> JavaScript cast function when
@@ -171,11 +189,6 @@ abstract class AbstractPeepholeOptimization {
   protected CodingConvention getCodingConvention() {
     // Note: this assumes a thread safe coding convention object.
     return compiler.getCodingConvention();
-  }
-
-  protected final boolean areDeclaredGlobalExternsOnWindow() {
-    checkNotNull(compiler);
-    return compiler.getOptions().declaredGlobalExternsOnWindow;
   }
 
   protected final void reportChangeToEnclosingScope(Node n) {

@@ -59,17 +59,25 @@ import com.google.javascript.rhino.jstype.JSTypeNative;
 import com.google.javascript.rhino.jstype.JSTypeRegistry;
 import com.google.javascript.rhino.testing.TestErrorReporter;
 import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 @RunWith(JUnit4.class)
 public class JSDocInfoTest {
-  private final TestErrorReporter errorReporter = new TestErrorReporter(null, null);
+  private final TestErrorReporter errorReporter = new TestErrorReporter();
   private final JSTypeRegistry registry = new JSTypeRegistry(errorReporter);
 
   private JSType getNativeType(JSTypeNative typeId) {
     return registry.getNativeType(typeId);
+  }
+
+  @After
+  public void validateWarningsAndErrors() {
+    errorReporter.verifyHasEncounteredAllWarningsAndErrors();
   }
 
   /** Tests the assigned ordinal of the elements of the {@link JSDocInfo.Visibility} enum. */
@@ -91,7 +99,7 @@ public class JSDocInfoTest {
     assertThat(info.getEnumParameterType()).isNull();
     assertThat(info.getParameterCount()).isEqualTo(0);
     assertThat(info.getReturnType()).isNull();
-    assertType(resolve(info.getType())).isStructurallyEqualTo(getNativeType(STRING_TYPE));
+    assertType(resolve(info.getType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(info.getVisibility()).isNull();
     assertThat(info.hasType()).isTrue();
     assertThat(info.isConstant()).isFalse();
@@ -110,7 +118,7 @@ public class JSDocInfoTest {
     assertThat(info.getEnumParameterType()).isNull();
     assertThat(info.getParameterCount()).isEqualTo(0);
     assertThat(info.getReturnType()).isNull();
-    assertType(resolve(info.getType())).isStructurallyEqualTo(getNativeType(STRING_TYPE));
+    assertType(resolve(info.getType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(info.getVisibility()).isEqualTo(PROTECTED);
     assertThat(info.hasType()).isTrue();
     assertThat(info.isConstant()).isFalse();
@@ -127,13 +135,29 @@ public class JSDocInfoTest {
     assertThat(info.getDescription()).isNull();
     assertThat(info.getEnumParameterType()).isNull();
     assertThat(info.getParameterCount()).isEqualTo(0);
-    assertType(resolve(info.getReturnType())).isStructurallyEqualTo(getNativeType(STRING_TYPE));
+    assertType(resolve(info.getReturnType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(info.getType()).isNull();
     assertThat(info.getVisibility()).isNull();
     assertThat(info.hasType()).isFalse();
     assertThat(info.isConstant()).isFalse();
     assertThat(info.isConstructor()).isFalse();
     assertThat(info.isHidden()).isFalse();
+  }
+
+  /** Tests that all module local names get correctly removed from a JSTypeExpression */
+  @Test
+  public void testRemovesModuleLocalNames() {
+    JSTypeExpression jsTypeExpression = createSampleTypeExpression();
+    Set<String> mockedModuleLocals = new LinkedHashSet<>();
+    mockedModuleLocals.add("Item");
+    mockedModuleLocals.add("AnotherItem");
+
+    JSTypeExpression newExpr = jsTypeExpression.replaceNamesWithUnknownType(mockedModuleLocals);
+    Set<String> replacedNames = newExpr.getAllTypeNames();
+    assertThat(replacedNames).doesNotContain("Item");
+    assertThat(replacedNames).contains("string");
+    assertThat(replacedNames).contains("boolean");
+    assertThat(replacedNames).doesNotContain("AnotherItem");
   }
 
   @Test
@@ -145,11 +169,11 @@ public class JSDocInfoTest {
     info.setReturnType(fromString("string"));
 
     assertType(resolve(info.getBaseType()))
-        .isStructurallyEqualTo(getNativeType(NUMBER_OBJECT_TYPE));
+        .isEqualTo(getNativeType(NUMBER_OBJECT_TYPE));
     assertThat(info.getDescription()).isNull();
     assertThat(info.getEnumParameterType()).isNull();
     assertThat(info.getParameterCount()).isEqualTo(0);
-    assertType(resolve(info.getReturnType())).isStructurallyEqualTo(getNativeType(STRING_TYPE));
+    assertType(resolve(info.getReturnType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(info.getType()).isNull();
     assertThat(info.getVisibility()).isNull();
     assertThat(info.hasType()).isFalse();
@@ -166,7 +190,7 @@ public class JSDocInfoTest {
     assertThat(info.getBaseType()).isNull();
     assertThat(info.getDescription()).isNull();
     assertType(resolve(info.getEnumParameterType()))
-        .isStructurallyEqualTo(getNativeType(STRING_TYPE));
+        .isEqualTo(getNativeType(STRING_TYPE));
     assertThat(info.getParameterCount()).isEqualTo(0);
     assertThat(info.getReturnType()).isNull();
     assertThat(info.getType()).isNull();
@@ -203,7 +227,7 @@ public class JSDocInfoTest {
       // expected
     }
 
-    assertType(resolve(info.getType())).isStructurallyEqualTo(getNativeType(NUMBER_TYPE));
+    assertType(resolve(info.getType())).isEqualTo(getNativeType(NUMBER_TYPE));
     assertThat(info.getReturnType()).isNull();
     assertThat(info.getEnumParameterType()).isNull();
     assertThat(info.getTypedefType()).isNull();
@@ -237,7 +261,7 @@ public class JSDocInfoTest {
       // expected
     }
 
-    assertType(resolve(info.getReturnType())).isStructurallyEqualTo(getNativeType(BOOLEAN_TYPE));
+    assertType(resolve(info.getReturnType())).isEqualTo(getNativeType(BOOLEAN_TYPE));
     assertThat(info.getEnumParameterType()).isNull();
     assertThat(info.getType()).isNull();
     assertThat(info.getTypedefType()).isNull();
@@ -274,7 +298,7 @@ public class JSDocInfoTest {
     assertThat(info.getTypedefType()).isNull();
     assertThat(info.getReturnType()).isNull();
     assertType(resolve(info.getEnumParameterType()))
-        .isStructurallyEqualTo(getNativeType(BOOLEAN_TYPE));
+        .isEqualTo(getNativeType(BOOLEAN_TYPE));
   }
 
   @Test
@@ -282,7 +306,7 @@ public class JSDocInfoTest {
     JSDocInfo info = new JSDocInfo();
     info.declareTypedefType(fromString("boolean"));
 
-    assertType(resolve(info.getTypedefType())).isStructurallyEqualTo(getNativeType(BOOLEAN_TYPE));
+    assertType(resolve(info.getTypedefType())).isEqualTo(getNativeType(BOOLEAN_TYPE));
     assertThat(info.hasTypedefType()).isTrue();
     assertThat(info.hasType()).isFalse();
     assertThat(info.hasEnumParameterType()).isFalse();
@@ -452,7 +476,8 @@ public class JSDocInfoTest {
 
   @Test
   public void testDescriptionContainsAtSignCode() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     info.setOriginalCommentString("Blah blah {@code blah blah} blah blah.");
 
     assertThat(info.isAtSignCodePresent()).isTrue();
@@ -460,7 +485,8 @@ public class JSDocInfoTest {
 
   @Test
   public void testDescriptionDoesNotContainAtSignCode() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     info.setOriginalCommentString("Blah blah `blah blah` blah blah.");
 
     assertThat(info.isAtSignCodePresent()).isFalse();
@@ -481,9 +507,9 @@ public class JSDocInfoTest {
     JSDocInfo cloned = info.clone();
 
     assertType(resolve(cloned.getBaseType()))
-        .isStructurallyEqualTo(getNativeType(NUMBER_OBJECT_TYPE));
+        .isEqualTo(getNativeType(NUMBER_OBJECT_TYPE));
     assertThat(cloned.getDescription()).isEqualTo("The source info");
-    assertType(resolve(cloned.getReturnType())).isStructurallyEqualTo(getNativeType(STRING_TYPE));
+    assertType(resolve(cloned.getReturnType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(cloned.isConstant()).isTrue();
     assertThat(cloned.isConstructor()).isTrue();
     assertThat(cloned.isHidden()).isTrue();
@@ -492,15 +518,15 @@ public class JSDocInfoTest {
     cloned.setHidden(false);
     cloned.setBaseType(fromString("string"));
 
-    assertType(resolve(cloned.getBaseType())).isStructurallyEqualTo(getNativeType(STRING_TYPE));
+    assertType(resolve(cloned.getBaseType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(cloned.getDescription()).isEqualTo("The cloned info");
     assertThat(cloned.isHidden()).isFalse();
 
     // Original info should be unchanged.
     assertType(resolve(info.getBaseType()))
-        .isStructurallyEqualTo(getNativeType(NUMBER_OBJECT_TYPE));
+        .isEqualTo(getNativeType(NUMBER_OBJECT_TYPE));
     assertThat(info.getDescription()).isEqualTo("The source info");
-    assertType(resolve(info.getReturnType())).isStructurallyEqualTo(getNativeType(STRING_TYPE));
+    assertType(resolve(info.getReturnType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(info.isConstant()).isTrue();
     assertThat(info.isConstructor()).isTrue();
     assertThat(info.isHidden()).isTrue();
@@ -523,15 +549,15 @@ public class JSDocInfoTest {
 
     assertThat(cloned.getBaseType().getRoot()).isNotSameInstanceAs(info.getBaseType().getRoot());
     assertType(resolve(cloned.getBaseType()))
-        .isStructurallyEqualTo(getNativeType(NUMBER_OBJECT_TYPE));
+        .isEqualTo(getNativeType(NUMBER_OBJECT_TYPE));
     assertThat(cloned.getDescription()).isEqualTo("The source info");
     assertThat(cloned.getReturnType().getRoot())
         .isNotSameInstanceAs(info.getReturnType().getRoot());
-    assertType(resolve(cloned.getReturnType())).isStructurallyEqualTo(getNativeType(STRING_TYPE));
+    assertType(resolve(cloned.getReturnType())).isEqualTo(getNativeType(STRING_TYPE));
     assertThat(cloned.getParameterType("a").getRoot())
         .isNotSameInstanceAs(info.getParameterType("a").getRoot());
     assertType(resolve(cloned.getParameterType("a")))
-        .isStructurallyEqualTo(getNativeType(STRING_TYPE));
+        .isEqualTo(getNativeType(STRING_TYPE));
   }
 
   @Test
@@ -543,6 +569,95 @@ public class JSDocInfoTest {
     assertThat(cloned.getParameterType("a")).isNull();
   }
 
+  /** Test names in {@code @param} get replaced */
+  @Test
+  public void testJSDocInfoCloneAndReplaceNames_params() {
+    JSDocInfo info = new JSDocInfo();
+    JSTypeExpression jsTypeExpression = createSampleTypeExpression();
+    info.declareParam(jsTypeExpression, "a");
+
+    Set<String> mockedModuleLocals = new LinkedHashSet<>();
+    mockedModuleLocals.add("Item");
+    mockedModuleLocals.add("AnotherItem");
+
+    JSDocInfo cloned = info.cloneAndReplaceTypeNames(mockedModuleLocals);
+
+    assertThat(cloned.getParameterCount()).isEqualTo(1);
+    assertThat(cloned.getParameterNameAt(0)).isEqualTo("a");
+    assertThat(cloned.getParameterType("a"))
+        .isNotEqualTo(jsTypeExpression); // not same reference after cloning
+    assertThat(cloned.getParameterType("a").getAllTypeNames()).doesNotContain("Item");
+    assertThat(cloned.getParameterType("a").getAllTypeNames()).doesNotContain("AnotherItem");
+  }
+
+  /** Test names in {@code @type} get replaced */
+  //              BANG                                        BANG
+  //               |                                           |
+  //              Item                                         ?
+  //            /  |   \                                    /  |   \
+  //       QMARK QMARK QMARK          -------->        QMARK QMARK QMARK
+  //          /    |    \                                 /    |     \
+  //    string boolean  AnotherItem                 string   boolean  ?
+  @Test
+  public void testJSDocInfoCloneAndReplaceNames_Type() {
+    JSDocInfo info = new JSDocInfo();
+    JSTypeExpression jsTypeExpression = createSampleTypeExpression();
+    info.setType(jsTypeExpression);
+
+    Set<String> mockedModuleLocals = new LinkedHashSet<>();
+    mockedModuleLocals.add("Item");
+    mockedModuleLocals.add("AnotherItem");
+
+    JSDocInfo cloned = info.cloneAndReplaceTypeNames(mockedModuleLocals);
+
+    assertThat(cloned.getType()).isNotEqualTo(jsTypeExpression);
+    assertThat(cloned.getType().getAllTypeNames()).doesNotContain("Item");
+    assertThat(cloned.getType().getAllTypeNames()).doesNotContain("AnotherItem");
+  }
+
+  /** Test names in {@code @type} get replaced */
+  //              Item                                       ?
+  //            /  |   \                                  /  |  \
+  //       QMARK QMARK QMARK       --------->        QMARK QMARK QMARK
+  //          /    |    \                               /    |    \
+  //    string boolean  AnotherItem               string   boolean  ?
+  @Test
+  public void testJSDocInfoCloneAndReplaceNames_Type_rootReplacement() {
+    JSDocInfo info = new JSDocInfo();
+    JSTypeExpression jsTypeExpression = createSampleTypeExpression_rootReplacement();
+    info.setType(jsTypeExpression);
+
+    Set<String> mockedModuleLocals = new LinkedHashSet<>();
+    mockedModuleLocals.add("Item");
+    mockedModuleLocals.add("AnotherItem");
+
+    JSDocInfo cloned = info.cloneAndReplaceTypeNames(mockedModuleLocals);
+
+    assertThat(cloned.getType()).isNotEqualTo(jsTypeExpression);
+    assertThat(cloned.getType().getRoot().getToken()).isEqualTo(Token.QMARK);
+    assertThat(cloned.getType().getAllTypeNames()).doesNotContain("Item");
+    assertThat(cloned.getType().getAllTypeNames()).doesNotContain("AnotherItem");
+  }
+
+  @Test
+  public void testJSDocInfoCloneAndReplaceNames_Type_SingleNode() {
+    JSDocInfo info = new JSDocInfo();
+    Node root = Node.newString("Item");
+    JSTypeExpression jsTypeExpression = new JSTypeExpression(root, "");
+    info.setType(jsTypeExpression);
+
+    Set<String> mockedModuleLocals = new LinkedHashSet<>();
+    mockedModuleLocals.add("Item");
+    mockedModuleLocals.add("AnotherItem");
+
+    JSDocInfo cloned = info.cloneAndReplaceTypeNames(mockedModuleLocals);
+
+    assertThat(cloned.getType()).isNotEqualTo(jsTypeExpression);
+    assertThat(cloned.getType().getRoot().getToken()).isEqualTo(Token.QMARK);
+    assertThat(cloned.getType().getAllTypeNames()).doesNotContain("Item");
+    assertThat(cloned.getType().getAllTypeNames()).doesNotContain("AnotherItem");
+  }
+
   @Test
   public void testSetFileOverviewWithDocumentationOff() {
     JSDocInfo info = new JSDocInfo();
@@ -552,32 +667,37 @@ public class JSDocInfoTest {
 
   @Test
   public void testSetFileOverviewWithDocumentationOn() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     info.documentFileOverview("hi bob");
     assertThat(info.getFileOverview()).isEqualTo("hi bob");
   }
 
   @Test
   public void testSetSuppressions() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     info.addSuppressions(ImmutableSet.of("sam", "bob"));
     assertThat(info.getSuppressions()).isEqualTo(ImmutableSet.of("bob", "sam"));
   }
 
   @Test
   public void testSetModifies() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     info.setModifies(ImmutableSet.of("this"));
     assertThat(info.getModifies()).isEqualTo(ImmutableSet.of("this"));
 
-    info = new JSDocInfo(true);
+    info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     info.setModifies(ImmutableSet.of("arguments"));
     assertThat(info.getModifies()).isEqualTo(ImmutableSet.of("arguments"));
   }
 
   @Test
   public void testAddSingleTemplateTypeName() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     ImmutableList<String> typeNames = ImmutableList.of("T");
     assertThat(info.declareTemplateTypeName("T")).isTrue();
     assertThat(info.getTemplateTypeNames()).isEqualTo(typeNames);
@@ -585,7 +705,8 @@ public class JSDocInfoTest {
 
   @Test
   public void testAddMultipleTemplateTypeName() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     ImmutableList<String> typeNames = ImmutableList.of("T", "R");
     info.declareTemplateTypeName("T");
     info.declareTemplateTypeName("R");
@@ -594,14 +715,16 @@ public class JSDocInfoTest {
 
   @Test
   public void testFailToAddTemplateTypeName() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
     info.declareTemplateTypeName("T");
     assertThat(info.declareTemplateTypeName("T")).isFalse();
   }
 
   @Test
   public void testGetThrowsDescription() {
-    JSDocInfo info = new JSDocInfo(true);
+    JSDocInfo info = new JSDocInfo();
+    info.setIncludeDocumentation(true);
 
     // Set a description so that info is initialized.
     info.setDescription("Lorem");
@@ -681,12 +804,49 @@ public class JSDocInfoTest {
   }
 
   /** Gets the type expression for a simple type name. */
-  private JSTypeExpression fromString(String s) {
+  private static JSTypeExpression fromString(String s) {
     return new JSTypeExpression(Node.newString(s), "");
   }
 
   private JSType resolve(JSTypeExpression n, String... warnings) {
-    errorReporter.setWarnings(warnings);
+    errorReporter.expectAllWarnings(warnings);
     return n.evaluate(null, registry);
+  }
+
+  /** Generates a sample type expression tree */
+  //
+  //              BANG
+  //               |
+  //              Item
+  //            /  |   \
+  //       QMARK QMARK QMARK
+  //          /    |    \
+  //    string boolean  AnotherItem
+  private static JSTypeExpression createSampleTypeExpression() {
+    Node root = new Node(Token.BANG, Node.newString("Item"));
+    Node child1 = new Node(Token.QMARK, Node.newString("string"));
+    Node child2 = new Node(Token.QMARK, Node.newString("boolean"));
+    Node child3 = new Node(Token.QMARK, Node.newString("AnotherItem"));
+    root.addChildToBack(child1);
+    root.addChildToBack(child2);
+    root.addChildToBack(child3);
+    return new JSTypeExpression(root, "");
+  }
+
+  /** Generates a sample type expression tree with root node as a typename */
+  //              Item
+  //            /  |   \
+  //       QMARK QMARK QMARK
+  //          /    |    \
+  //    string boolean  AnotherItem
+  private static JSTypeExpression createSampleTypeExpression_rootReplacement() {
+    Node root = Node.newString("Item");
+    Node child1 = new Node(Token.QMARK, Node.newString("string"));
+    Node child2 = new Node(Token.QMARK, Node.newString("boolean"));
+    Node child3 = new Node(Token.QMARK, Node.newString("AnotherItem"));
+    root.addChildToBack(child1);
+    root.addChildToBack(child2);
+    root.addChildToBack(child3);
+    return new JSTypeExpression(root, "");
   }
 }

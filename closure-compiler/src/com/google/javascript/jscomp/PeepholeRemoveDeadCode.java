@@ -29,8 +29,8 @@ import java.util.ArrayDeque;
 import javax.annotation.Nullable;
 
 /**
- * Peephole optimization to remove useless code such as IF's with false
- * guard conditions, comma operator left hand sides with no side effects, etc.
+ * Peephole optimization to remove useless code such as IF's with false guard conditions, comma
+ * operator's left hand sides with no side effects, etc.
  */
 class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
@@ -402,9 +402,12 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
 
       case AND:
       case OR:
-        // Try to remove the second operand from a AND or OR operations. Remember that if the second
+      case COALESCE:
+        // Try to remove the second operand from a AND, OR, and COALESCE operations. Remember that
+        // if the second
         // child still exists, the result of the first expression is being used, and so cannot be
         // removed.
+        //    x() ?? f --> x()
         //    x() || f --> x()
         //    x() && f --> x()
 
@@ -442,7 +445,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
   }
 
   /**
-   * Returns a expression executing {@code expr} which is legal in any expression context.
+   * Returns an expression executing {@code expr} which is legal in any expression context.
    *
    * @param expr An attached expression
    * @return A detached expression
@@ -454,7 +457,8 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
         switch (expr.getParent().getToken()) {
           case ARRAYLIT:
           case NEW:
-          case CALL:
+          case CALL: // `Math.sin(...c)`
+          case OPTCHAIN_CALL: // `Math?.sin(...c)`
             expr = IR.arraylit(expr.detach()).srcref(expr);
             break;
           case OBJECTLIT:
@@ -492,6 +496,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
       case COMMA:
       case HOOK:
       case OR:
+      case COALESCE:
         return true;
       case ARRAYLIT:
       case OBJECTLIT:
@@ -550,7 +555,8 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
       reportChangeToEnclosingScope(replacement);
       return replacement;
     } else if (n.hasTwoChildren() && n.getLastChild().isDefaultCase()) {
-      if (n.getFirstChild().isCall()) {
+      if (n.getFirstChild().isCall() || n.getFirstChild().isOptChainCall()) {
+        // Before removing switch, we must preserve the switch condition if it is a call
         return tryRemoveSwitchWithSingleCase(n, true);
       } else {
         return tryRemoveSwitchWithSingleCase(n, false);
@@ -617,7 +623,7 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
             // Remove the fallthrough case labels
             if (cur != matchingCase) {
               while (block.hasChildren()) {
-                matchingCaseBlock.addChildToBack(block.getFirstChild().detach());
+                matchingCaseBlock.addChildToBack(block.removeFirstChild());
               }
               reportChangeToEnclosingScope(cur);
               cur.detach();
@@ -925,15 +931,14 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
     return n != null && (n.isIf() || isExprConditional(n));
   }
 
-  /**
-   * @return Whether the node is a rooted with a HOOK, AND, or OR node.
-   */
+  /** @return Whether the node is a rooted with a HOOK, AND, OR, or COALESCE node. */
   private static boolean isExprConditional(Node n) {
     if (n.isExprResult()) {
       switch (n.getFirstChild().getToken()) {
         case HOOK:
         case AND:
         case OR:
+        case COALESCE:
           return true;
         default:
           break;
@@ -987,17 +992,17 @@ class PeepholeRemoveDeadCode extends AbstractPeepholeOptimization {
       elseBody = null;
     }
 
-    // if (x()) { }
+    // `if (x()) { }` or `if (x?.()) { }`
     if (!mayHaveSideEffects(thenBody) && elseBody == null) {
       if (mayHaveSideEffects(cond)) {
-        // x() has side effects, just leave the condition on its own.
+        // `x()` or `x?.()` has side effects, just leave the condition on its own.
         n.removeChild(cond);
         Node replacement = NodeUtil.newExpr(cond);
         parent.replaceChild(n, replacement);
         reportChangeToEnclosingScope(parent);
         return replacement;
       } else {
-        // x() has no side effects, the whole tree is useless now.
+        // `x()` or `x?.()` has no side effects, the whole tree is useless now.
         NodeUtil.removeChild(parent, n);
         reportChangeToEnclosingScope(parent);
         return null;

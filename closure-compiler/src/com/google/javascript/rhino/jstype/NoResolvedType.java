@@ -76,6 +76,11 @@ public final class NoResolvedType extends NoType {
   }
 
   @Override
+  JSTypeClass getTypeClass() {
+    return JSTypeClass.NO_RESOLVED;
+  }
+
+  @Override
   @Nullable
   public String getReferenceName() {
     return referenceName;
@@ -98,22 +103,7 @@ public final class NoResolvedType extends NoType {
   }
 
   @Override
-  public boolean isSubtype(JSType that) {
-    return isSubtype(that, ImplCache.create(), SubtypingMode.NORMAL);
-  }
-
-  @Override
-  protected boolean isSubtype(JSType that,
-      ImplCache implicitImplCache, SubtypingMode subtypingMode) {
-    if (JSType.isSubtypeHelper(this, that, implicitImplCache, subtypingMode)) {
-      return true;
-    } else {
-      return !that.isNoType();
-    }
-  }
-
-  @Override
-  StringBuilder appendTo(StringBuilder sb, boolean forAnnotations) {
-    return sb.append(forAnnotations ? "?" : "NoResolvedType");
+  void appendTo(TypeStringBuilder sb) {
+   sb.append(sb.isForAnnotations() ? "?" : "NoResolvedType");
   }
 }
