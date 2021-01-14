@@ -1,0 +1,10 @@
+{
+    "analyzeMe@5": {
+      "sources_that_must_reach_sinks": [],
+      "sources_that_may_reach_sinks": ["dirty@7"]
+    },
+    "ooo@1": {
+      "sources_that_must_reach_sinks": [],
+      "sources_that_may_reach_sinks": []
+    }
+}
